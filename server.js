@@ -54,47 +54,52 @@ function initPlayer(id, name) {
     };
 }
 
+let gameState = 'PLAYING'; // PLAYING, GAMEOVER
+let winner = null;
+let gameOverTimer = null;
+
 // --- Game Logic ---
-// Force game loop every 125ms (Super Fast!)
-setInterval(tick, 125);
+// Force game loop every 125ms
+setInterval(() => {
+    if (gameState === 'PLAYING') tick();
+}, 125);
 
 function tick() {
-    turn++; // Increment turn
+    turn++; 
     spawnFood();
+
+    let aliveCount = 0;
+    let lastSurvivor = null;
 
     Object.values(players).forEach(p => {
         if (!p.alive) return;
+        aliveCount++;
+        lastSurvivor = p;
 
-        // Apply intent
+        // ... (Existing Move Logic) ...
         p.direction = p.nextDirection;
         const head = p.body[0];
         const newHead = { x: head.x + p.direction.x, y: head.y + p.direction.y };
 
-        // 1. Wall Collision
-        if (newHead.x < 0 || newHead.x >= CONFIG.gridSize || 
-            newHead.y < 0 || newHead.y >= CONFIG.gridSize) {
-            p.alive = false;
-            console.log(`💀 ${p.name} hit a wall`);
-            return;
-        }
-
-        // 2. Body Collision (Self & Others)
-        for (let otherId in players) {
-            const other = players[otherId];
-            if (!other.alive) continue;
-            for (let part of other.body) {
-                if (newHead.x === part.x && newHead.y === part.y) {
-                    p.alive = false;
-                    console.log(`💀 ${p.name} crashed`);
-                    return;
+        // Collision Checks
+        let crashed = false;
+        if (newHead.x < 0 || newHead.x >= CONFIG.gridSize || newHead.y < 0 || newHead.y >= CONFIG.gridSize) crashed = true;
+        
+        if (!crashed) {
+            for (let otherId in players) {
+                const other = players[otherId];
+                if (!other.alive) continue;
+                for (let part of other.body) {
+                    if (newHead.x === part.x && newHead.y === part.y) crashed = true;
                 }
             }
         }
 
-        // Move
-        if (p.alive) {
+        if (crashed) {
+            p.alive = false; // Die
+        } else {
+            // Move & Eat
             p.body.unshift(newHead);
-            // Eat?
             let ate = false;
             for (let i = 0; i < food.length; i++) {
                 if (food[i].x === newHead.x && food[i].y === newHead.y) {
@@ -106,23 +111,49 @@ function tick() {
             }
             if (!ate) p.body.pop();
         }
-
-        p.hasMoved = false; // Reset turn flag
+        
+        p.hasMoved = false; 
     });
 
+    // --- Win Condition ---
+    // If only 1 (or 0) left, triggers Game Over
+    // Only check if we actually had players to begin with (>1)
+    const totalPlayers = Object.keys(players).length;
+    if (totalPlayers > 1 && aliveCount <= 1) {
+        gameState = 'GAMEOVER';
+        winner = lastSurvivor ? lastSurvivor.name : "No Winner";
+        console.log(`🏆 GAME OVER! Winner: ${winner}`);
+        
+        // Reset after 5 seconds
+        setTimeout(resetGame, 5000);
+    }
+
     broadcastState();
+}
+
+function resetGame() {
+    console.log("🔄 Resetting Arena...");
+    players = {}; // Kick everyone out (or keep them and respawn? Let's kick for new round)
+    food = [];
+    turn = 0;
+    gameState = 'PLAYING';
+    winner = null;
+    // Note: Clients will need to re-join
 }
 
 function broadcastState() {
     const state = {
         gridSize: CONFIG.gridSize,
         turn: turn,
-        players: Object.values(players).filter(p => p.alive).map(p => ({
+        gameState: gameState, // Send status
+        winner: winner,       // Send winner name
+        players: Object.values(players).map(p => ({ // Send ALL players (even dead ones) for scoreboard
             id: p.id,
             name: p.name,
             color: p.color,
             body: p.body,
-            score: p.score
+            score: p.score,
+            alive: p.alive
         })),
         food: food
     };

@@ -60,20 +60,49 @@
             });
 
             // 5. Draw Players
-            state.players.forEach(p => {
+            // Sort by score for layering (and leaderboard)
+            const sortedPlayers = state.players.sort((a,b) => b.score - a.score);
+            
+            sortedPlayers.forEach(p => {
+                if (!p.alive) return; // Don't draw dead bodies on map? Or maybe draw gray?
                 ctx.fillStyle = p.color;
                 p.body.forEach(b => {
                     ctx.fillRect(b.x*TILE+1, b.y*TILE+1, TILE-2, TILE-2);
                 });
-                
-                // Name tag
                 const head = p.body[0];
                 ctx.fillStyle = '#fff';
                 ctx.font = '10px Arial';
                 ctx.fillText(p.name, head.x*TILE + TILE/2, head.y*TILE - 5);
             });
             
-            status.innerText = `Turn: ${state.turn} | Players: ${state.players.length}`;
+            // 6. Game Over Overlay
+            if (state.gameState === 'GAMEOVER') {
+                ctx.fillStyle = 'rgba(0,0,0,0.85)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                
+                ctx.fillStyle = '#FFD700'; // Gold
+                ctx.font = 'bold 60px Arial';
+                ctx.fillText(`🏆 WINNER: ${state.winner} 🏆`, 400, 150);
+                
+                // Leaderboard
+                ctx.fillStyle = '#fff';
+                ctx.font = '30px Arial';
+                ctx.textAlign = 'left';
+                let y = 250;
+                ctx.fillText("--- LEADERBOARD ---", 250, y);
+                y += 50;
+                
+                sortedPlayers.slice(0, 10).forEach((p, i) => {
+                    ctx.fillStyle = p.alive ? '#0f0' : '#666'; // Green if alive (winner), gray if dead
+                    ctx.fillText(`#${i+1} ${p.name} - Score: ${p.score}`, 250, y);
+                    y += 40;
+                });
+                
+                status.innerText = "GAME OVER - Resetting in 5s...";
+                return;
+            }
+            
+            status.innerText = `Turn: ${state.turn} | Players: ${state.players.filter(p=>p.alive).length}`;
         }
 
         connect();
