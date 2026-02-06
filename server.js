@@ -58,11 +58,41 @@ let gameState = 'PLAYING'; // PLAYING, GAMEOVER
 let winner = null;
 let gameOverTimer = null;
 
+const fs = require('fs');
+
+// --- Persistence ---
+const HISTORY_FILE = 'history.json';
+let matchHistory = [];
+
+// Load history on startup
+if (fs.existsSync(HISTORY_FILE)) {
+    try {
+        matchHistory = JSON.parse(fs.readFileSync(HISTORY_FILE));
+    } catch (e) { console.error("Failed to load history", e); }
+}
+
+function saveHistory(winnerName, score) {
+    const record = {
+        timestamp: new Date().toISOString(),
+        winner: winnerName,
+        score: score,
+        id: Date.now()
+    };
+    matchHistory.unshift(record); // Add to top
+    if (matchHistory.length > 100) matchHistory.pop(); // Keep last 100
+    fs.writeFileSync(HISTORY_FILE, JSON.stringify(matchHistory));
+}
+
 // --- Game Logic ---
 // Force game loop every 125ms
 setInterval(() => {
     if (gameState === 'PLAYING') tick();
 }, 125);
+
+// API to get history
+app.get('/history', (req, res) => {
+    res.json(matchHistory);
+});
 
 function tick() {
     turn++; 
@@ -122,10 +152,13 @@ function tick() {
     if (totalPlayers > 1 && aliveCount <= 1) {
         gameState = 'GAMEOVER';
         winner = lastSurvivor ? lastSurvivor.name : "No Winner";
-        console.log(`🏆 GAME OVER! Winner: ${winner}`);
+        const score = lastSurvivor ? lastSurvivor.score : 0;
         
-        // Reset after 5 seconds
-        setTimeout(resetGame, 5000);
+        console.log(`🏆 GAME OVER! Winner: ${winner}`);
+        saveHistory(winner, score);
+        
+        // Reset after 3 minutes (180 seconds)
+        setTimeout(resetGame, 180 * 1000);
     }
 
     broadcastState();

@@ -2,110 +2,221 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Snake Arena Live</title>
+    <title>NEON SNAKE ARENA</title>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
     <style>
-        body { background: #000; color: #0f0; font-family: sans-serif; text-align: center; }
-        canvas { border: 2px solid #333; background: #111; margin-top: 20px; }
+        :root {
+            --bg-color: #050510;
+            --grid-line: #1a1a2e;
+            --neon-green: #00ff88;
+            --neon-pink: #ff0055;
+            --neon-blue: #00ccff;
+            --text-glow: 0 0 10px rgba(0,255,136,0.5);
+        }
+        body {
+            background-color: var(--bg-color);
+            color: #fff;
+            font-family: 'Orbitron', sans-serif;
+            margin: 0;
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+        
+        /* Layout */
+        .main-stage {
+            flex: 2;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            border-right: 2px solid #333;
+            position: relative;
+        }
+        .sidebar {
+            flex: 1;
+            background: #0a0a1a;
+            padding: 20px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Arena */
+        h1 {
+            color: var(--neon-green);
+            text-shadow: var(--text-glow);
+            margin-bottom: 10px;
+            letter-spacing: 2px;
+        }
+        canvas {
+            border: 4px solid var(--neon-blue);
+            box-shadow: 0 0 30px rgba(0, 204, 255, 0.2);
+            background-color: #000;
+            max-width: 90%;
+            max-height: 80vh;
+        }
+
+        /* Status Bar */
+        .status-bar {
+            margin-top: 15px;
+            font-size: 1.2rem;
+            color: #888;
+        }
+        .status-bar span { color: white; }
+
+        /* History List */
+        h2 { border-bottom: 2px solid var(--neon-pink); padding-bottom: 10px; }
+        .history-list { list-style: none; padding: 0; }
+        .history-item {
+            background: rgba(255,255,255,0.05);
+            margin-bottom: 8px;
+            padding: 10px;
+            border-left: 4px solid #555;
+            display: flex;
+            justify-content: space-between;
+            transition: all 0.2s;
+        }
+        .history-item:hover { transform: translateX(5px); background: rgba(255,255,255,0.1); }
+        .history-item.winner { border-left-color: var(--neon-green); }
+        .time { font-size: 0.8em; color: #666; }
+        .score { color: var(--neon-blue); }
+
+        /* Game Over Overlay */
+        #overlay {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.85);
+            display: none; /* Flex when active */
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 10;
+        }
+        .winner-title {
+            font-size: 4rem;
+            color: var(--neon-pink);
+            text-shadow: 0 0 20px var(--neon-pink);
+            margin-bottom: 20px;
+            animation: pulse 1s infinite alternate;
+        }
+        @keyframes pulse { from { text-shadow: 0 0 10px var(--neon-pink); } to { text-shadow: 0 0 30px var(--neon-pink); } }
+
     </style>
 </head>
 <body>
-    <h1 id="status">Connecting...</h1>
-    <canvas id="arena" width="800" height="800"></canvas>
-    
+
+    <div class="main-stage">
+        <h1>SNAKE ARENA <span style="font-size:0.5em;color:#666">LIVE</span></h1>
+        <canvas id="arena" width="800" height="800"></canvas>
+        <div class="status-bar" id="status">Connecting...</div>
+        
+        <div id="overlay">
+            <div class="winner-title">GAME OVER</div>
+            <h2 id="winner-name" style="font-size: 2rem; color: white;">Winner: ???</h2>
+            <p id="countdown" style="margin-top: 20px; color: #888;">Next round in 180s</p>
+        </div>
+    </div>
+
+    <div class="sidebar">
+        <h2>HALL OF FAME</h2>
+        <div id="history-container">Loading...</div>
+    </div>
+
     <script>
         const canvas = document.getElementById('arena');
         const ctx = canvas.getContext('2d');
         const status = document.getElementById('status');
-        
+        const overlay = document.getElementById('overlay');
+        const winnerName = document.getElementById('winner-name');
+        const countdown = document.getElementById('countdown');
+        const historyContainer = document.getElementById('history-container');
+
+        // 1. WebSocket Game Loop
         function connect() {
-            // Auto-detect: if https, use wss; if http, use ws
             const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const host = location.host; // e.g. snake-arena.onrender.com
-            const ws = new WebSocket(`${protocol}//${host}`);
+            const ws = new WebSocket(`${protocol}//${location.host}`);
             
-            ws.onopen = () => { status.innerText = "LIVE: Connected"; status.style.color = "#0f0"; };
-            ws.onclose = () => { status.innerText = "Disconnected"; status.style.color = "#f00"; setTimeout(connect, 1000); };
-            
+            ws.onopen = () => { status.innerText = "SYSTEM ONLINE"; };
             ws.onmessage = (e) => {
-                try {
-                    const msg = JSON.parse(e.data);
-                    if (msg.type === 'update') {
-                        draw(msg.state);
-                    }
-                } catch(err) { console.error(err); }
+                const msg = JSON.parse(e.data);
+                if (msg.type === 'update') draw(msg.state);
             };
         }
 
         function draw(state) {
-            // 1. Clear
-            ctx.fillStyle = '#111';
+            // Handle Game Over UI
+            if (state.gameState === 'GAMEOVER') {
+                overlay.style.display = 'flex';
+                winnerName.innerText = `WINNER: ${state.winner}`;
+                // Simple client-side countdown visual (server controls actual reset)
+                countdown.innerText = "Next Round: Starting Soon..."; 
+                fetchHistory(); // Refresh sidebar
+            } else {
+                overlay.style.display = 'none';
+            }
+
+            // Draw Canvas
+            ctx.fillStyle = '#050510';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             
-            // 2. Draw Turn Counter (Background)
-            ctx.fillStyle = '#222';
-            ctx.font = 'bold 200px Arial';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText(state.turn, 400, 400);
-
-            // 3. Draw Grid
+            // Draw Grid (Cyberpunk style)
+            ctx.strokeStyle = '#1a1a2e';
+            ctx.lineWidth = 1;
             const TILE = canvas.width / state.gridSize;
-
-            // 4. Draw Food
-            ctx.fillStyle = '#f00';
-            state.food.forEach(f => {
-                ctx.beginPath();
-                ctx.arc(f.x*TILE + TILE/2, f.y*TILE + TILE/2, TILE/2-2, 0, Math.PI*2);
-                ctx.fill();
-            });
-
-            // 5. Draw Players
-            // Sort by score for layering (and leaderboard)
-            const sortedPlayers = state.players.sort((a,b) => b.score - a.score);
-            
-            sortedPlayers.forEach(p => {
-                if (!p.alive) return; // Don't draw dead bodies on map? Or maybe draw gray?
-                ctx.fillStyle = p.color;
-                p.body.forEach(b => {
-                    ctx.fillRect(b.x*TILE+1, b.y*TILE+1, TILE-2, TILE-2);
-                });
-                const head = p.body[0];
-                ctx.fillStyle = '#fff';
-                ctx.font = '10px Arial';
-                ctx.fillText(p.name, head.x*TILE + TILE/2, head.y*TILE - 5);
-            });
-            
-            // 6. Game Over Overlay
-            if (state.gameState === 'GAMEOVER') {
-                ctx.fillStyle = 'rgba(0,0,0,0.85)';
-                ctx.fillRect(0, 0, canvas.width, canvas.height);
-                
-                ctx.fillStyle = '#FFD700'; // Gold
-                ctx.font = 'bold 60px Arial';
-                ctx.fillText(`🏆 WINNER: ${state.winner} 🏆`, 400, 150);
-                
-                // Leaderboard
-                ctx.fillStyle = '#fff';
-                ctx.font = '30px Arial';
-                ctx.textAlign = 'left';
-                let y = 250;
-                ctx.fillText("--- LEADERBOARD ---", 250, y);
-                y += 50;
-                
-                sortedPlayers.slice(0, 10).forEach((p, i) => {
-                    ctx.fillStyle = p.alive ? '#0f0' : '#666'; // Green if alive (winner), gray if dead
-                    ctx.fillText(`#${i+1} ${p.name} - Score: ${p.score}`, 250, y);
-                    y += 40;
-                });
-                
-                status.innerText = "GAME OVER - Resetting in 5s...";
-                return;
+            for(let i=0; i<=state.gridSize; i++) {
+                ctx.beginPath(); ctx.moveTo(i*TILE, 0); ctx.lineTo(i*TILE, canvas.height); ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(0, i*TILE); ctx.lineTo(canvas.width, i*TILE); ctx.stroke();
             }
-            
-            status.innerText = `Turn: ${state.turn} | Players: ${state.players.filter(p=>p.alive).length}`;
+
+            // Food (Glowing)
+            ctx.shadowBlur = 15; ctx.shadowColor = '#ff0055';
+            ctx.fillStyle = '#ff0055';
+            state.food.forEach(f => {
+                ctx.beginPath(); ctx.arc(f.x*TILE+TILE/2, f.y*TILE+TILE/2, TILE/2-2, 0, Math.PI*2); ctx.fill();
+            });
+            ctx.shadowBlur = 0;
+
+            // Players
+            state.players.forEach(p => {
+                if(!p.alive) return; // Don't draw dead
+                ctx.fillStyle = p.color;
+                ctx.shadowBlur = 10; ctx.shadowColor = p.color;
+                p.body.forEach(b => ctx.fillRect(b.x*TILE+1, b.y*TILE+1, TILE-2, TILE-2));
+                ctx.shadowBlur = 0;
+            });
+
+            status.innerHTML = `TURN: <span>${state.turn}</span> | ALIVE: <span>${state.players.filter(p=>p.alive).length}</span>`;
+        }
+
+        // 2. Fetch History API
+        async function fetchHistory() {
+            try {
+                const res = await fetch('/history');
+                const data = await res.json();
+                
+                let html = '<ul class="history-list">';
+                data.slice(0, 50).forEach(match => {
+                    const date = new Date(match.timestamp).toLocaleTimeString();
+                    html += `
+                        <li class="history-item winner">
+                            <div>
+                                <div style="font-weight:bold; color:${match.winner==='No Winner'?'#666':'#fff'}">${match.winner}</div>
+                                <div class="time">${date}</div>
+                            </div>
+                            <div class="score">${match.score} PTS</div>
+                        </li>
+                    `;
+                });
+                html += '</ul>';
+                if(data.length > 50) html += '<div style="text-align:center; padding:10px; color:#666">... and more ...</div>';
+                
+                historyContainer.innerHTML = html;
+            } catch(e) { console.error(e); }
         }
 
         connect();
+        fetchHistory(); // Initial load
     </script>
 </body>
 </html>
