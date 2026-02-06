@@ -69,23 +69,50 @@ function decideMove(me, state) {
 
     if (safeMoves.length === 0) return moves[0]; // 必死无疑
 
-    // 2. 寻路 (本地计算)
+    // 2. 寻路 (BFS - 简单路径搜索)
     if (food) {
-        // 🌟 破局逻辑：15% 概率随机乱走，防止陷入死循环
-        if (Math.random() < 0.15 && safeMoves.length > 1) {
-            return safeMoves[Math.floor(Math.random() * safeMoves.length)];
-        }
-
-        let best = safeMoves[0];
-        let min = Infinity;
-        safeMoves.forEach(m => {
-            const d = Math.abs((head.x+m.x) - food.x) + Math.abs((head.y+m.y) - food.y);
-            if (d < min) { min = d; best = m; }
-        });
-        return best;
+        const path = bfs(head, food, state);
+        if (path) return path;
     }
     
+    // 3. 如果没路了，或者找不到食物，随机游走但尽量不死
     return safeMoves[Math.floor(Math.random() * safeMoves.length)];
+}
+
+// 简单的 BFS 寻路
+function bfs(start, end, state) {
+    let queue = [{ x: start.x, y: start.y, path: [] }];
+    let visited = new Set();
+    visited.add(`${start.x},${start.y}`);
+    
+    // 构建障碍物 Set
+    let obstacles = new Set();
+    state.players.forEach(p => p.body.forEach(b => obstacles.add(`${b.x},${b.y}`)));
+
+    while (queue.length > 0) {
+        let curr = queue.shift();
+        
+        // 限制搜索深度以节省 CPU (只看未来 20 步)
+        if (curr.path.length > 20) continue;
+
+        if (curr.x === end.x && curr.y === end.y) {
+            return curr.path[0]; // 返回第一步
+        }
+
+        const moves = [{x:0,y:-1}, {x:0,y:1}, {x:-1,y:0}, {x:1,y:0}];
+        for (let m of moves) {
+            let nx = curr.x + m.x;
+            let ny = curr.y + m.y;
+            let key = `${nx},${ny}`;
+
+            if (nx >= 0 && nx < gridSize && ny >= 0 && ny < gridSize && 
+                !obstacles.has(key) && !visited.has(key)) {
+                visited.add(key);
+                queue.push({ x: nx, y: ny, path: [...curr.path, m] });
+            }
+        }
+    }
+    return null;
 }
 
 function findClosestFood(head, foodList) {

@@ -86,7 +86,8 @@
         #overlay {
             position: absolute;
             top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.85);
+            background: rgba(0,0,0,0.4); /* Much lighter overlay */
+            backdrop-filter: blur(2px); /* Slight blur for focus */
             display: none; /* Flex when active */
             flex-direction: column;
             justify-content: center;
@@ -96,7 +97,7 @@
         .winner-title {
             font-size: 4rem;
             color: var(--neon-pink);
-            text-shadow: 0 0 20px var(--neon-pink);
+            text-shadow: 2px 2px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;
             margin-bottom: 20px;
             animation: pulse 1s infinite alternate;
         }
