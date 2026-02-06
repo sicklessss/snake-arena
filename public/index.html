@@ -146,13 +146,23 @@
         }
 
         function draw(state) {
-            // Handle Game Over UI
+            // --- 1. GAME OVER (结算) ---
             if (state.gameState === 'GAMEOVER') {
                 overlay.style.display = 'flex';
                 winnerName.innerText = `WINNER: ${state.winner}`;
-                // Simple client-side countdown visual (server controls actual reset)
-                countdown.innerText = "Next Round: Starting Soon..."; 
-                fetchHistory(); // Refresh sidebar
+                winnerName.style.color = '#FFD700'; // Gold
+                countdown.innerText = `NEXT MATCH SETUP IN: ${state.timeLeft}s`;
+                fetchHistory(); 
+                return; // Stop drawing game
+            }
+            
+            // --- 2. COUNTDOWN (下注) ---
+            if (state.gameState === 'COUNTDOWN') {
+                overlay.style.display = 'flex';
+                winnerName.innerText = "⚠️ BETTING OPEN ⚠️";
+                winnerName.style.color = '#ff0055'; // Red
+                countdown.innerText = `BATTLE STARTS IN: ${state.timeLeft}s`;
+                // Draw background still (empty arena)
             } else {
                 overlay.style.display = 'none';
             }
