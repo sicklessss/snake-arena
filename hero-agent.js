@@ -3,8 +3,8 @@ const WebSocket = require('ws');
 const http = require('http');
 
 const AGENT_NAME = 'HERO-AI'; 
-const SERVER_URL = 'ws://localhost:3000';
-const CONTROL_PORT = 3001;
+const SERVER_URL = process.argv[2] || 'ws://localhost:3000';
+const CONTROL_PORT = parseInt(process.argv[3]) || 4000;
 
 const ws = new WebSocket(SERVER_URL);
 
