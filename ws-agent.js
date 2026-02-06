@@ -1,8 +1,9 @@
 
 const WebSocket = require('ws');
 
+// Usage: node ws-agent.js <Name> <ServerURL>
 const AGENT_NAME = process.argv[2] || 'WsBot';
-const SERVER_URL = 'ws://localhost:3000'; // 走 WebSocket 通道
+const SERVER_URL = process.argv[3] || 'ws://localhost:3000'; 
 
 const ws = new WebSocket(SERVER_URL);
 
