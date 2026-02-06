@@ -71,6 +71,11 @@ function decideMove(me, state) {
 
     // 2. 寻路 (本地计算)
     if (food) {
+        // 🌟 破局逻辑：15% 概率随机乱走，防止陷入死循环
+        if (Math.random() < 0.15 && safeMoves.length > 1) {
+            return safeMoves[Math.floor(Math.random() * safeMoves.length)];
+        }
+
         let best = safeMoves[0];
         let min = Infinity;
         safeMoves.forEach(m => {
