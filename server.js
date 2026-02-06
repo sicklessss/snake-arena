@@ -55,8 +55,8 @@ function initPlayer(id, name) {
 }
 
 // --- Game Logic ---
-// Force game loop every 250ms (High Speed!)
-setInterval(tick, 250);
+// Force game loop every 125ms (Super Fast!)
+setInterval(tick, 125);
 
 function tick() {
     turn++; // Increment turn

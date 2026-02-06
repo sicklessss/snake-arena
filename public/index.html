@@ -18,7 +18,10 @@
         const status = document.getElementById('status');
         
         function connect() {
-            const ws = new WebSocket(`ws://${location.host}`);
+            // Auto-detect: if https, use wss; if http, use ws
+            const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const host = location.host; // e.g. snake-arena.onrender.com
+            const ws = new WebSocket(`${protocol}//${host}`);
             
             ws.onopen = () => { status.innerText = "LIVE: Connected"; status.style.color = "#0f0"; };
             ws.onclose = () => { status.innerText = "Disconnected"; status.style.color = "#f00"; setTimeout(connect, 1000); };
