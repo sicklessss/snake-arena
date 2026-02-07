@@ -7,6 +7,12 @@ let ws = null;
 let myId = null;
 let gridSize = 30;
 
+// Anti-loop detection
+let positionHistory = [];
+const MAX_HISTORY = 20;
+let loopCounter = 0;
+let forceRandomUntil = 0;
+
 const DIRS = [
     { x: 0, y: -1, name: 'up' },
     { x: 0, y: 1, name: 'down' },
@@ -48,6 +54,10 @@ function handleUpdate(state) {
             myId = null;
             ws.send(JSON.stringify({ type: 'join', name: BOT_NAME }));
         }
+        // Reset loop detection on new match
+        positionHistory = [];
+        loopCounter = 0;
+        forceRandomUntil = 0;
         return;
     }
     
@@ -55,6 +65,26 @@ function handleUpdate(state) {
     
     const me = state.players.find(p => p.id === myId);
     if (!me || !me.alive) return;
+    
+    // Track position for loop detection
+    const head = me.body[0];
+    const posKey = `${head.x},${head.y}`;
+    positionHistory.push(posKey);
+    if (positionHistory.length > MAX_HISTORY) {
+        positionHistory.shift();
+    }
+    
+    // Detect loops: if same position appears 3+ times in recent history
+    const posCount = positionHistory.filter(p => p === posKey).length;
+    if (posCount >= 3) {
+        loopCounter++;
+        if (loopCounter >= 2) {
+            // Force random movement for a few ticks
+            forceRandomUntil = Date.now() + 2000; // 2 seconds of randomness
+            positionHistory = []; // Reset history
+            loopCounter = 0;
+        }
+    }
     
     const move = smartStrategy(state, me);
     if (move) {
@@ -74,6 +104,9 @@ function smartStrategy(state, me) {
     const head = me.body[0];
     const myLen = me.body.length;
     const myDir = me.direction;
+    
+    // If in forced random mode, add randomness to break loops
+    const inLoopBreakMode = Date.now() < forceRandomUntil;
     
     // Build obstacle map
     const obstacles = new Set();
@@ -250,6 +283,15 @@ function smartStrategy(state, me) {
     }
     
     moves.sort((a, b) => b.score - a.score);
+    
+    // In loop break mode, sometimes pick a random safe move instead of best
+    if (inLoopBreakMode && moves.length > 1 && Math.random() < 0.5) {
+        const safeMoves = moves.filter(m => m.score > 0);
+        if (safeMoves.length > 1) {
+            return safeMoves[Math.floor(Math.random() * safeMoves.length)].dir;
+        }
+    }
+    
     return moves[0].dir;
 }
 

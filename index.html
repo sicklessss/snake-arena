@@ -243,18 +243,33 @@
                     }
                 });
                 
-                // Head (lobster emoji 🦞)
+                // Head (triangle pointing in direction)
                 const head = p.body[0];
+                const dir = p.direction || {x:1, y:0};
                 const cx = head.x * cellSize + cellSize/2;
                 const cy = head.y * cellSize + cellSize/2;
+                const size = cellSize/2 - 1;
                 
-                ctx.save();
-                ctx.shadowBlur = 0;
-                ctx.font = `${Math.floor(cellSize * 0.85)}px Arial`;
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'middle';
-                ctx.fillText('🦞', cx, cy);
-                ctx.restore();
+                ctx.beginPath();
+                if (dir.x === 1) { // Right
+                    ctx.moveTo(cx + size, cy);
+                    ctx.lineTo(cx - size, cy - size);
+                    ctx.lineTo(cx - size, cy + size);
+                } else if (dir.x === -1) { // Left
+                    ctx.moveTo(cx - size, cy);
+                    ctx.lineTo(cx + size, cy - size);
+                    ctx.lineTo(cx + size, cy + size);
+                } else if (dir.y === -1) { // Up
+                    ctx.moveTo(cx, cy - size);
+                    ctx.lineTo(cx - size, cy + size);
+                    ctx.lineTo(cx + size, cy + size);
+                } else { // Down
+                    ctx.moveTo(cx, cy + size);
+                    ctx.lineTo(cx - size, cy - size);
+                    ctx.lineTo(cx + size, cy - size);
+                }
+                ctx.closePath();
+                ctx.fill();
                 
                 ctx.shadowBlur = 0;
                 ctx.globalAlpha = 1;
