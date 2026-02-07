@@ -120,7 +120,12 @@
     </div>
 
     <div class="sidebar">
-        <h2>HALL OF FAME</h2>
+        <h2>⚔️ CURRENT FIGHTERS</h2>
+        <div id="players-container">Waiting for players...</div>
+        
+        <div style="height: 100vh;"></div> <!-- Spacer to push Hall of Fame below fold -->
+        
+        <h2>🏆 HALL OF FAME</h2>
         <div id="history-container">Loading...</div>
     </div>
 
@@ -132,6 +137,7 @@
         const winnerName = document.getElementById('winner-name');
         const countdown = document.getElementById('countdown');
         const historyContainer = document.getElementById('history-container');
+        const playersContainer = document.getElementById('players-container');
 
         // 1. WebSocket Game Loop
         function connect() {
@@ -198,6 +204,39 @@
             });
 
             status.innerHTML = `TURN: <span>${state.turn}</span> | ALIVE: <span>${state.players.filter(p=>p.alive).length}</span>`;
+            
+            // Update players list
+            updatePlayersList(state.players);
+        }
+        
+        function updatePlayersList(players) {
+            if (!players || players.length === 0) {
+                playersContainer.innerHTML = '<div style="color:#666;padding:10px;">Waiting for players...</div>';
+                return;
+            }
+            
+            // Sort: alive first, then by score
+            const sorted = [...players].sort((a,b) => {
+                if (a.alive !== b.alive) return b.alive - a.alive;
+                return b.score - a.score;
+            });
+            
+            let html = '<ul class="history-list">';
+            sorted.forEach(p => {
+                const statusIcon = p.alive ? '🐍' : '💀';
+                const opacity = p.alive ? '1' : '0.4';
+                html += `
+                    <li class="history-item" style="opacity:${opacity}; border-left-color:${p.color}">
+                        <div>
+                            <div style="font-weight:bold; color:${p.color}">${statusIcon} ${p.name}</div>
+                            <div class="time">Length: ${p.body ? p.body.length : '?'}</div>
+                        </div>
+                        <div class="score">${p.score} PTS</div>
+                    </li>
+                `;
+            });
+            html += '</ul>';
+            playersContainer.innerHTML = html;
         }
 
         // 2. Fetch History API
