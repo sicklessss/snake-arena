@@ -2,16 +2,14 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>NEON SNAKE ARENA</title>
+    <title>SNAKE ARENA</title>
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
     <style>
         :root {
             --bg-color: #050510;
-            --grid-line: #1a1a2e;
             --neon-green: #00ff88;
             --neon-pink: #ff0055;
             --neon-blue: #00ccff;
-            --text-glow: 0 0 10px rgba(0,255,136,0.5);
         }
         body {
             background-color: var(--bg-color);
@@ -22,8 +20,6 @@
             height: 100vh;
             overflow: hidden;
         }
-        
-        /* Layout */
         .main-stage {
             flex: 2;
             display: flex;
@@ -31,242 +27,248 @@
             align-items: center;
             justify-content: center;
             border-right: 2px solid #333;
-            position: relative;
         }
         .sidebar {
             flex: 1;
             background: #0a0a1a;
             padding: 20px;
             overflow-y: auto;
-            display: flex;
-            flex-direction: column;
         }
-
-        /* Arena */
         h1 {
             color: var(--neon-green);
-            text-shadow: var(--text-glow);
+            text-shadow: 0 0 10px rgba(0,255,136,0.5);
+            margin-bottom: 5px;
+        }
+        .match-info {
+            color: var(--neon-blue);
+            font-size: 1.5rem;
+            margin-bottom: 5px;
+        }
+        .timer {
+            color: #ff8800;
+            font-size: 2rem;
+            font-weight: bold;
+            text-shadow: 0 0 15px rgba(255,136,0,0.7);
             margin-bottom: 10px;
-            letter-spacing: 2px;
         }
         canvas {
             border: 4px solid var(--neon-blue);
             box-shadow: 0 0 30px rgba(0, 204, 255, 0.2);
             background-color: #000;
             max-width: 90%;
-            max-height: 80vh;
+            max-height: 70vh;
         }
-
-        /* Status Bar */
         .status-bar {
-            margin-top: 15px;
-            font-size: 1.2rem;
+            margin-top: 10px;
+            font-size: 1rem;
             color: #888;
         }
         .status-bar span { color: white; }
-
-        /* History List */
         h2 { border-bottom: 2px solid var(--neon-pink); padding-bottom: 10px; }
-        .history-list { list-style: none; padding: 0; }
-        .history-item {
+        .fighter-list { list-style: none; padding: 0; }
+        .fighter-item {
             background: rgba(255,255,255,0.05);
-            margin-bottom: 8px;
-            padding: 10px;
+            margin-bottom: 5px;
+            padding: 8px;
             border-left: 4px solid #555;
             display: flex;
             justify-content: space-between;
-            transition: all 0.2s;
+            align-items: center;
         }
-        .history-item:hover { transform: translateX(5px); background: rgba(255,255,255,0.1); }
-        .history-item.winner { border-left-color: var(--neon-green); }
-        .time { font-size: 0.8em; color: #666; }
-        .score { color: var(--neon-blue); }
-
-        /* Game Over Overlay */
+        .fighter-item.alive { border-left-color: var(--neon-green); }
+        .fighter-item.dead { border-left-color: #ff3333; opacity: 0.6; }
+        .fighter-name { font-weight: bold; }
+        .fighter-length { color: var(--neon-blue); }
         #overlay {
             position: absolute;
-            top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.4); /* Much lighter overlay */
-            backdrop-filter: blur(2px); /* Slight blur for focus */
-            display: none; /* Flex when active */
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
+            top: 50%;
+            left: 35%;
+            transform: translate(-50%, -50%);
+            text-align: center;
             z-index: 10;
+            pointer-events: none;
         }
-        .winner-title {
-            font-size: 4rem;
-            color: var(--neon-pink);
-            text-shadow: 2px 2px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;
-            margin-bottom: 20px;
-            animation: pulse 1s infinite alternate;
+        .overlay-text {
+            font-size: 3rem;
+            color: var(--neon-green);
+            text-shadow: 0 0 30px rgba(0,255,136,0.8);
         }
-        @keyframes pulse { from { text-shadow: 0 0 10px var(--neon-pink); } to { text-shadow: 0 0 30px var(--neon-pink); } }
-
+        .countdown { color: #ff8800; font-size: 5rem; }
     </style>
 </head>
 <body>
-
     <div class="main-stage">
-        <h1>SNAKE ARENA <span style="font-size:0.5em;color:#666">LIVE</span></h1>
-        <canvas id="arena" width="800" height="800"></canvas>
+        <h1>🐍 SNAKE ARENA</h1>
+        <div class="match-info" id="match-info">MATCH #?</div>
+        <div class="timer" id="timer">3:00</div>
+        <canvas id="arena" width="600" height="600"></canvas>
         <div class="status-bar" id="status">Connecting...</div>
-        
-        <div id="overlay">
-            <div class="winner-title">GAME OVER</div>
-            <h2 id="winner-name" style="font-size: 2rem; color: white;">Winner: ???</h2>
-            <p id="countdown" style="margin-top: 20px; color: #888;">Next round in 180s</p>
-        </div>
+        <div id="overlay"></div>
     </div>
-
     <div class="sidebar">
         <h2>⚔️ CURRENT FIGHTERS</h2>
-        <div id="players-container">Waiting for players...</div>
-        
-        <div style="height: 100vh;"></div> <!-- Spacer to push Hall of Fame below fold -->
-        
-        <h2>🏆 HALL OF FAME</h2>
-        <div id="history-container">Loading...</div>
+        <ul class="fighter-list" id="fighters"></ul>
+        <h2>🏆 MATCH HISTORY</h2>
+        <ul class="fighter-list" id="history"></ul>
     </div>
 
     <script>
         const canvas = document.getElementById('arena');
         const ctx = canvas.getContext('2d');
+        const matchInfo = document.getElementById('match-info');
+        const timerDisplay = document.getElementById('timer');
         const status = document.getElementById('status');
         const overlay = document.getElementById('overlay');
-        const winnerName = document.getElementById('winner-name');
-        const countdown = document.getElementById('countdown');
-        const historyContainer = document.getElementById('history-container');
-        const playersContainer = document.getElementById('players-container');
-
-        // 1. WebSocket Game Loop
-        function connect() {
-            const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const ws = new WebSocket(`${protocol}//${location.host}`);
+        const fightersList = document.getElementById('fighters');
+        const historyList = document.getElementById('history');
+        
+        let gridSize = 30;
+        const cellSize = canvas.width / gridSize;
+        
+        const ws = new WebSocket(`ws://${location.host}`);
+        
+        ws.onopen = () => { status.textContent = 'Connected!'; };
+        ws.onclose = () => { status.textContent = 'Disconnected...'; };
+        
+        ws.onmessage = (e) => {
+            const msg = JSON.parse(e.data);
+            if (msg.type === 'update') {
+                render(msg.state);
+            }
+        };
+        
+        // Load history
+        fetch('/history').then(r => r.json()).then(data => {
+            historyList.innerHTML = data.slice(0, 20).map(m => 
+                `<li class="fighter-item"><span>#${m.matchId || '?'}</span><span>${m.winner}</span></li>`
+            ).join('');
+        });
+        
+        function render(state) {
+            gridSize = state.gridSize || 30;
             
-            ws.onopen = () => { status.innerText = "SYSTEM ONLINE"; };
-            ws.onmessage = (e) => {
-                const msg = JSON.parse(e.data);
-                if (msg.type === 'update') draw(msg.state);
-            };
-        }
-
-        function draw(state) {
-            // --- 1. GAME OVER (结算) ---
-            if (state.gameState === 'GAMEOVER') {
-                overlay.style.display = 'flex';
-                winnerName.innerText = `WINNER: ${state.winner}`;
-                winnerName.style.color = '#FFD700'; // Gold
-                countdown.innerText = `NEXT MATCH SETUP IN: ${state.timeLeft}s`;
-                fetchHistory(); 
-                return; // Stop drawing game
+            // Update match info
+            matchInfo.textContent = `MATCH #${state.matchId || '?'}`;
+            
+            // Update timer (3 minute countdown)
+            if (state.gameState === 'PLAYING') {
+                const timeLeft = state.matchTimeLeft || 0;
+                const mins = Math.floor(timeLeft / 60);
+                const secs = timeLeft % 60;
+                timerDisplay.textContent = `${mins}:${String(secs).padStart(2, '0')}`;
+                timerDisplay.style.color = timeLeft < 30 ? '#ff3333' : '#ff8800';
+            } else if (state.gameState === 'COUNTDOWN') {
+                timerDisplay.textContent = `Starting in ${state.timeLeft}s`;
+                timerDisplay.style.color = '#00ff88';
+            } else if (state.gameState === 'GAMEOVER') {
+                timerDisplay.textContent = `Next match in ${state.timeLeft}s`;
+                timerDisplay.style.color = '#888';
             }
             
-            // --- 2. COUNTDOWN (下注) ---
+            // Update status
+            const alive = state.players.filter(p => p.alive).length;
+            status.innerHTML = `ALIVE: <span>${alive}</span> / ${state.players.length}`;
+            
+            // Overlay
             if (state.gameState === 'COUNTDOWN') {
-                overlay.style.display = 'flex';
-                winnerName.innerText = "⚠️ BETTING OPEN ⚠️";
-                winnerName.style.color = '#ff0055'; // Red
-                countdown.innerText = `BATTLE STARTS IN: ${state.timeLeft}s`;
-                // Draw background still (empty arena)
+                overlay.innerHTML = `<div class="overlay-text">GET READY!</div><div class="countdown">${state.timeLeft}</div>`;
+            } else if (state.gameState === 'GAMEOVER') {
+                overlay.innerHTML = `<div class="overlay-text">🏆 ${state.winner || 'NO WINNER'}</div>`;
+            } else if (state.victoryPause) {
+                const winner = state.players.find(p => p.alive);
+                overlay.innerHTML = `<div class="overlay-text">🎯 ${winner ? winner.name : ''} WINS!</div>`;
             } else {
-                overlay.style.display = 'none';
+                overlay.innerHTML = '';
             }
-
-            // Draw Canvas
-            ctx.fillStyle = '#050510';
+            
+            // Draw arena
+            ctx.fillStyle = '#000';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             
-            // Draw Grid (Cyberpunk style)
+            // Grid
             ctx.strokeStyle = '#1a1a2e';
-            ctx.lineWidth = 1;
-            const TILE = canvas.width / state.gridSize;
-            for(let i=0; i<=state.gridSize; i++) {
-                ctx.beginPath(); ctx.moveTo(i*TILE, 0); ctx.lineTo(i*TILE, canvas.height); ctx.stroke();
-                ctx.beginPath(); ctx.moveTo(0, i*TILE); ctx.lineTo(canvas.width, i*TILE); ctx.stroke();
+            ctx.lineWidth = 0.5;
+            for (let i = 0; i <= gridSize; i++) {
+                ctx.beginPath();
+                ctx.moveTo(i * cellSize, 0);
+                ctx.lineTo(i * cellSize, canvas.height);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(0, i * cellSize);
+                ctx.lineTo(canvas.width, i * cellSize);
+                ctx.stroke();
             }
-
-            // Food (Glowing)
-            ctx.shadowBlur = 15; ctx.shadowColor = '#ff0055';
+            
+            // Food
             ctx.fillStyle = '#ff0055';
-            state.food.forEach(f => {
-                ctx.beginPath(); ctx.arc(f.x*TILE+TILE/2, f.y*TILE+TILE/2, TILE/2-2, 0, Math.PI*2); ctx.fill();
+            ctx.shadowColor = '#ff0055';
+            ctx.shadowBlur = 10;
+            (state.food || []).forEach(f => {
+                ctx.beginPath();
+                ctx.arc(f.x * cellSize + cellSize/2, f.y * cellSize + cellSize/2, cellSize/3, 0, Math.PI * 2);
+                ctx.fill();
             });
             ctx.shadowBlur = 0;
-
-            // Players
+            
+            // Snakes
             state.players.forEach(p => {
-                if(!p.alive) return; // Don't draw dead
-                ctx.fillStyle = p.color;
-                ctx.shadowBlur = 10; ctx.shadowColor = p.color;
-                p.body.forEach(b => ctx.fillRect(b.x*TILE+1, b.y*TILE+1, TILE-2, TILE-2));
-                ctx.shadowBlur = 0;
-            });
-
-            status.innerHTML = `TURN: <span>${state.turn}</span> | ALIVE: <span>${state.players.filter(p=>p.alive).length}</span>`;
-            
-            // Update players list
-            updatePlayersList(state.players);
-        }
-        
-        function updatePlayersList(players) {
-            if (!players || players.length === 0) {
-                playersContainer.innerHTML = '<div style="color:#666;padding:10px;">Waiting for players...</div>';
-                return;
-            }
-            
-            // Sort: alive first, then by score
-            const sorted = [...players].sort((a,b) => {
-                if (a.alive !== b.alive) return b.alive - a.alive;
-                return b.score - a.score;
-            });
-            
-            let html = '<ul class="history-list">';
-            sorted.forEach(p => {
-                const statusIcon = p.alive ? '🐍' : '💀';
-                const opacity = p.alive ? '1' : '0.4';
-                html += `
-                    <li class="history-item" style="opacity:${opacity}; border-left-color:${p.color}">
-                        <div>
-                            <div style="font-weight:bold; color:${p.color}">${statusIcon} ${p.name}</div>
-                            <div class="time">Length: ${p.body ? p.body.length : '?'}</div>
-                        </div>
-                        <div class="score">${p.score} PTS</div>
-                    </li>
-                `;
-            });
-            html += '</ul>';
-            playersContainer.innerHTML = html;
-        }
-
-        // 2. Fetch History API
-        async function fetchHistory() {
-            try {
-                const res = await fetch('/history');
-                const data = await res.json();
+                if (!p.body || p.body.length === 0) return;
                 
-                let html = '<ul class="history-list">';
-                data.slice(0, 50).forEach(match => {
-                    const date = new Date(match.timestamp).toLocaleTimeString();
-                    html += `
-                        <li class="history-item winner">
-                            <div>
-                                <div style="font-weight:bold; color:${match.winner==='No Winner'?'#666':'#fff'}">${match.winner}</div>
-                                <div class="time">${date}</div>
-                            </div>
-                            <div class="score">${match.score} PTS</div>
-                        </li>
-                    `;
+                const isBlinking = !p.alive && p.blinking;
+                if (isBlinking && Math.floor(Date.now() / 150) % 2 === 0) return;
+                
+                ctx.fillStyle = p.color || '#00ff88';
+                ctx.shadowColor = p.color || '#00ff88';
+                ctx.shadowBlur = p.alive ? 8 : 3;
+                ctx.globalAlpha = p.alive ? 1 : 0.5;
+                
+                // Body
+                p.body.forEach((seg, i) => {
+                    if (i === 0) return; // Skip head
+                    ctx.fillRect(seg.x * cellSize + 1, seg.y * cellSize + 1, cellSize - 2, cellSize - 2);
                 });
-                html += '</ul>';
-                if(data.length > 50) html += '<div style="text-align:center; padding:10px; color:#666">... and more ...</div>';
                 
-                historyContainer.innerHTML = html;
-            } catch(e) { console.error(e); }
+                // Head (triangle)
+                const head = p.body[0];
+                const dir = p.direction || {x:1, y:0};
+                const cx = head.x * cellSize + cellSize/2;
+                const cy = head.y * cellSize + cellSize/2;
+                const size = cellSize/2 - 1;
+                
+                ctx.beginPath();
+                if (dir.x === 1) { // Right
+                    ctx.moveTo(cx + size, cy);
+                    ctx.lineTo(cx - size, cy - size);
+                    ctx.lineTo(cx - size, cy + size);
+                } else if (dir.x === -1) { // Left
+                    ctx.moveTo(cx - size, cy);
+                    ctx.lineTo(cx + size, cy - size);
+                    ctx.lineTo(cx + size, cy + size);
+                } else if (dir.y === -1) { // Up
+                    ctx.moveTo(cx, cy - size);
+                    ctx.lineTo(cx - size, cy + size);
+                    ctx.lineTo(cx + size, cy + size);
+                } else { // Down
+                    ctx.moveTo(cx, cy + size);
+                    ctx.lineTo(cx - size, cy - size);
+                    ctx.lineTo(cx + size, cy - size);
+                }
+                ctx.closePath();
+                ctx.fill();
+                
+                ctx.shadowBlur = 0;
+                ctx.globalAlpha = 1;
+            });
+            
+            // Update fighters list (sorted by length, show all including dead)
+            const allPlayers = [...state.players].sort((a, b) => b.body.length - a.body.length);
+            fightersList.innerHTML = allPlayers.map(p => 
+                `<li class="fighter-item ${p.alive ? 'alive' : 'dead'}">
+                    <span class="fighter-name" style="color:${p.color}">${p.name}</span>
+                    <span class="fighter-length">${p.body.length} ${p.alive ? '🐍' : '💀'}</span>
+                </li>`
+            ).join('');
         }
-
-        connect();
-        fetchHistory(); // Initial load
     </script>
 </body>
 </html>
