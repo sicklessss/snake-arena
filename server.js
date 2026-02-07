@@ -69,8 +69,76 @@ setInterval(() => {
 
 function tick() {
     turn++;
-    // ... (Food spawning & Collision logic remains same) ...
-    // ...
+    
+    // Spawn food
+    while (food.length < MAX_FOOD) {
+        food.push({
+            x: Math.floor(Math.random() * CONFIG.gridSize),
+            y: Math.floor(Math.random() * CONFIG.gridSize)
+        });
+    }
+    
+    // Move players
+    Object.values(players).forEach(p => {
+        if (!p.alive) return;
+        
+        // Update direction
+        p.direction = p.nextDirection;
+        
+        // Calculate new head position
+        const head = p.body[0];
+        const newHead = {
+            x: (head.x + p.direction.x + CONFIG.gridSize) % CONFIG.gridSize,
+            y: (head.y + p.direction.y + CONFIG.gridSize) % CONFIG.gridSize
+        };
+        
+        // Check food collision
+        const foodIndex = food.findIndex(f => f.x === newHead.x && f.y === newHead.y);
+        if (foodIndex !== -1) {
+            food.splice(foodIndex, 1);
+            p.score++;
+        } else {
+            p.body.pop(); // Remove tail if no food eaten
+        }
+        
+        // Add new head
+        p.body.unshift(newHead);
+    });
+    
+    // Check collisions
+    Object.values(players).forEach(p => {
+        if (!p.alive) return;
+        const head = p.body[0];
+        
+        // Self collision
+        for (let i = 1; i < p.body.length; i++) {
+            if (p.body[i].x === head.x && p.body[i].y === head.y) {
+                p.alive = false;
+                return;
+            }
+        }
+        
+        // Collision with others
+        Object.values(players).forEach(other => {
+            if (other.id === p.id) return;
+            for (const seg of other.body) {
+                if (seg.x === head.x && seg.y === head.y) {
+                    p.alive = false;
+                    return;
+                }
+            }
+        });
+    });
+    
+    // Calculate alive count and last survivor
+    let aliveCount = 0;
+    let lastSurvivor = null;
+    Object.values(players).forEach(p => {
+        if (p.alive) {
+            aliveCount++;
+            lastSurvivor = p;
+        }
+    });
     
     // Win Condition
     const totalPlayers = Object.keys(players).length;
