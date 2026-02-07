@@ -1,141 +1,256 @@
-
 const WebSocket = require('ws');
 
-// Usage: node ws-agent.js <Name> <ServerURL>
-const AGENT_NAME = process.argv[2] || 'WsBot';
-const SERVER_URL = process.argv[3] || 'ws://localhost:3000'; 
+const BOT_NAME = process.argv[2] || 'SmartBot';
+const SERVER_URL = process.argv[3] || 'ws://localhost:3000';
 
-const ws = new WebSocket(SERVER_URL);
-
+let ws = null;
 let myId = null;
 let gridSize = 30;
 
-ws.on('open', () => {
-    console.log(`🔌 ${AGENT_NAME} connected via WebSocket!`);
-    // 注册自己
-    ws.send(JSON.stringify({ type: 'join', name: AGENT_NAME }));
-});
+const DIRS = [
+    { x: 0, y: -1, name: 'up' },
+    { x: 0, y: 1, name: 'down' },
+    { x: -1, y: 0, name: 'left' },
+    { x: 1, y: 0, name: 'right' }
+];
 
-ws.on('message', (data) => {
-    try {
-        const msg = JSON.parse(data);
+function connect() {
+    ws = new WebSocket(SERVER_URL);
+    
+    ws.on('open', () => {
+        ws.send(JSON.stringify({ type: 'join', name: BOT_NAME }));
+    });
 
-        // 1. 初始化信息
-        if (msg.type === 'init') {
-            myId = msg.id;
-            gridSize = msg.gridSize;
-            console.log(`✅ Registered as ID: ${myId}`);
+    ws.on('message', (data) => {
+        try {
+            const msg = JSON.parse(data);
+            if (msg.type === 'init' || msg.type === 'queued') {
+                myId = msg.id;
+                gridSize = msg.gridSize || 30;
+            }
+            if (msg.type === 'update') {
+                handleUpdate(msg.state);
+            }
+        } catch(e) {}
+    });
+
+    ws.on('close', () => {
+        myId = null;
+        setTimeout(connect, 1000);
+    });
+    ws.on('error', () => {});
+}
+
+function handleUpdate(state) {
+    if (state.gameState === 'COUNTDOWN') {
+        const inWaiting = state.waitingPlayers?.some(p => p.id === myId);
+        if (!inWaiting) {
+            myId = null;
+            ws.send(JSON.stringify({ type: 'join', name: BOT_NAME }));
         }
+        return;
+    }
+    
+    if (state.gameState !== 'PLAYING') return;
+    
+    const me = state.players.find(p => p.id === myId);
+    if (!me || !me.alive) return;
+    
+    const move = smartStrategy(state, me);
+    if (move) {
+        ws.send(JSON.stringify({ type: 'move', direction: move }));
+    }
+}
 
-        // 2. 收到服务器的主动推送 (Server Push)
-        if (msg.type === 'update') {
-            const state = msg.state;
-            const me = state.players.find(p => p.id === myId);
+function manhattan(a, b) {
+    return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
+}
 
-            // 如果我还活着，就在本地计算下一步
-            if (me) {
-                const move = decideMove(me, state);
-                // 发送指令给服务器
-                ws.send(JSON.stringify({ type: 'move', direction: move }));
+function isOpposite(dir1, dir2) {
+    return dir1.x === -dir2.x && dir1.y === -dir2.y;
+}
+
+function smartStrategy(state, me) {
+    const head = me.body[0];
+    const myLen = me.body.length;
+    const myDir = me.direction;
+    
+    // Build obstacle map
+    const obstacles = new Set();
+    
+    // Dead snakes (except eaten type)
+    state.players.forEach(p => {
+        if (!p.alive && p.deathType !== 'eaten') {
+            p.body.forEach(seg => obstacles.add(`${seg.x},${seg.y}`));
+        }
+    });
+    
+    // My body (except tail which will move)
+    for (let i = 1; i < me.body.length - 1; i++) {
+        obstacles.add(`${me.body[i].x},${me.body[i].y}`);
+    }
+    
+    // Enemy info
+    const enemies = state.players.filter(p => p.id !== me.id && p.alive);
+    
+    // Enemy bodies (except tails)
+    enemies.forEach(p => {
+        for (let i = 1; i < p.body.length - 1; i++) {
+            obstacles.add(`${p.body[i].x},${p.body[i].y}`);
+        }
+    });
+    
+    // Predict enemy head positions
+    const enemyNextHeads = new Map(); // key -> enemy
+    enemies.forEach(p => {
+        const h = p.body[0];
+        DIRS.forEach(d => {
+            const nx = h.x + d.x;
+            const ny = h.y + d.y;
+            const key = `${nx},${ny}`;
+            if (!enemyNextHeads.has(key)) {
+                enemyNextHeads.set(key, []);
+            }
+            enemyNextHeads.get(key).push(p);
+        });
+    });
+    
+    // Get valid directions (no 180 turn)
+    const validDirs = DIRS.filter(d => !isOpposite(d, myDir));
+    
+    const moves = [];
+    
+    for (const dir of validDirs) {
+        const nx = head.x + dir.x;
+        const ny = head.y + dir.y;
+        const key = `${nx},${ny}`;
+        
+        // Wall check
+        if (nx < 0 || nx >= gridSize || ny < 0 || ny >= gridSize) continue;
+        
+        // Obstacle check
+        if (obstacles.has(key)) continue;
+        
+        let score = 100;
+        let killOpportunity = false;
+        
+        // Check enemy head collision
+        const enemyHead = enemies.find(p => p.body[0].x === nx && p.body[0].y === ny);
+        if (enemyHead) {
+            const theirLen = enemyHead.body.length;
+            if (myLen > theirLen) {
+                score = 800; // KILL!
+                killOpportunity = true;
+            } else if (myLen === theirLen) {
+                score = -1000; // Both die - AVOID!
             } else {
-                // 我死了，尝试重新加入（简单的复活逻辑）
-                if (Math.random() < 0.05) { // 偶尔尝试重连，别太频繁
-                    ws.send(JSON.stringify({ type: 'join', name: AGENT_NAME }));
+                score = -800; // We die
+            }
+        }
+        
+        // Check if enemy might move here (head collision risk)
+        if (!killOpportunity && enemyNextHeads.has(key)) {
+            const potentialColliders = enemyNextHeads.get(key);
+            let dominated = true;
+            for (const enemy of potentialColliders) {
+                if (enemy.body.length >= myLen) {
+                    dominated = false;
+                    break;
+                }
+            }
+            if (!dominated) {
+                score -= 150; // Risk of collision with equal/longer snake
+            }
+        }
+        
+        // Check if we can attack enemy body (longer snake eats shorter)
+        enemies.forEach(p => {
+            for (let i = 1; i < p.body.length; i++) {
+                if (p.body[i].x === nx && p.body[i].y === ny) {
+                    if (myLen > p.body.length) {
+                        // We can eat their tail!
+                        const toEat = p.body.length - i;
+                        score += 200 + toEat * 50;
+                        killOpportunity = true;
+                    } else {
+                        // We die
+                        score = -500;
+                    }
+                }
+            }
+        });
+        
+        // ** AGGRESSION: Check if enemy is adjacent and we're longer **
+        if (!killOpportunity) {
+            enemies.forEach(p => {
+                if (p.body.length >= myLen) return; // Only attack shorter
+                
+                const enemyHead = p.body[0];
+                
+                // Check if turning would hit their body
+                for (let i = 1; i < p.body.length; i++) {
+                    const seg = p.body[i];
+                    if (seg.x === nx && seg.y === ny) {
+                        const toEat = p.body.length - i;
+                        score += 300 + toEat * 40; // Aggressive attack!
+                    }
+                }
+                
+                // Check if we're parallel and can cut them off
+                const dist = manhattan({x: nx, y: ny}, enemyHead);
+                if (dist === 1 && myLen > p.body.length) {
+                    score += 150; // Good position to attack
+                }
+            });
+        }
+        
+        // Future options (survival)
+        let futureOptions = 0;
+        for (const nd of DIRS) {
+            const nnx = nx + nd.x;
+            const nny = ny + nd.y;
+            if (nnx >= 0 && nnx < gridSize && nny >= 0 && nny < gridSize) {
+                if (!obstacles.has(`${nnx},${nny}`)) {
+                    futureOptions++;
                 }
             }
         }
-    } catch (e) {
-        console.error("Error processing message:", e);
-    }
-});
-
-ws.on('close', () => {
-    console.log(`❌ Disconnected.`);
-    process.exit(0);
-});
-
-ws.on('error', (err) => {
-    console.log(`❌ Connection error: ${err.message}`);
-});
-
-// --- 本地计算逻辑 (完全在本地运行，不消耗服务器算力) ---
-function decideMove(me, state) {
-    const head = me.body[0];
-    const food = findClosestFood(head, state.food);
-    const moves = [{x:0,y:-1}, {x:0,y:1}, {x:-1,y:0}, {x:1,y:0}];
-
-    // 1. 避障 (本地计算)
-    const safeMoves = moves.filter(dir => isSafe(head, dir, state));
-
-    if (safeMoves.length === 0) return moves[0]; // 必死无疑
-
-    // 2. 寻路 (BFS - 简单路径搜索)
-    if (food) {
-        const path = bfs(head, food, state);
-        if (path) return path;
-    }
-    
-    // 3. 如果没路了，或者找不到食物，随机游走但尽量不死
-    return safeMoves[Math.floor(Math.random() * safeMoves.length)];
-}
-
-// 简单的 BFS 寻路
-function bfs(start, end, state) {
-    let queue = [{ x: start.x, y: start.y, path: [] }];
-    let visited = new Set();
-    visited.add(`${start.x},${start.y}`);
-    
-    // 构建障碍物 Set
-    let obstacles = new Set();
-    state.players.forEach(p => p.body.forEach(b => obstacles.add(`${b.x},${b.y}`)));
-
-    while (queue.length > 0) {
-        let curr = queue.shift();
+        if (futureOptions === 0) score -= 300;
+        else if (futureOptions === 1) score -= 100;
+        else score += futureOptions * 15;
         
-        // 限制搜索深度以节省 CPU (只看未来 20 步)
-        if (curr.path.length > 20) continue;
-
-        if (curr.x === end.x && curr.y === end.y) {
-            return curr.path[0]; // 返回第一步
+        // Food seeking
+        let closestFood = Infinity;
+        (state.food || []).forEach(f => {
+            const d = manhattan({x: nx, y: ny}, f);
+            if (d < closestFood) closestFood = d;
+        });
+        if (closestFood < Infinity) {
+            score += (12 - Math.min(closestFood, 12)) * 8;
         }
-
-        const moves = [{x:0,y:-1}, {x:0,y:1}, {x:-1,y:0}, {x:1,y:0}];
-        for (let m of moves) {
-            let nx = curr.x + m.x;
-            let ny = curr.y + m.y;
-            let key = `${nx},${ny}`;
-
-            if (nx >= 0 && nx < gridSize && ny >= 0 && ny < gridSize && 
-                !obstacles.has(key) && !visited.has(key)) {
-                visited.add(key);
-                queue.push({ x: nx, y: ny, path: [...curr.path, m] });
+        
+        // Slight center preference
+        const center = gridSize / 2;
+        const distToCenter = Math.abs(nx - center) + Math.abs(ny - center);
+        score -= distToCenter * 0.5;
+        
+        moves.push({ dir, score });
+    }
+    
+    if (moves.length === 0) {
+        // Emergency: any direction
+        for (const d of DIRS) {
+            const nx = head.x + d.x;
+            const ny = head.y + d.y;
+            if (nx >= 0 && nx < gridSize && ny >= 0 && ny < gridSize) {
+                return d;
             }
         }
+        return DIRS[0];
     }
-    return null;
-}
-
-function findClosestFood(head, foodList) {
-    if (!foodList || foodList.length === 0) return null;
-    let closest = null; let min = Infinity;
-    foodList.forEach(f => {
-        const d = Math.abs(head.x - f.x) + Math.abs(head.y - f.y);
-        if (d < min) { min = d; closest = f; }
-    });
-    return closest;
-}
-
-function isSafe(head, dir, state) {
-    const nx = head.x + dir.x;
-    const ny = head.y + dir.y;
-    // 检查撞墙
-    if (nx < 0 || nx >= gridSize || ny < 0 || ny >= gridSize) return false;
     
-    // 检查撞人 (遍历本地收到的数据)
-    for (let p of state.players) {
-        for (let part of p.body) {
-            if (nx === part.x && ny === part.y) return false;
-        }
-    }
-    return true;
+    moves.sort((a, b) => b.score - a.score);
+    return moves[0].dir;
 }
+
+connect();
