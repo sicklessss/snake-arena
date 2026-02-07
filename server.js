@@ -5,6 +5,32 @@ const path = require('path');
 const fs = require('fs');
 const bodyParser = require('body-parser');
 
+// High-contrast color palette (16 distinct colors)
+const SNAKE_COLORS = [
+    '#FF0000', // Red
+    '#00FF00', // Lime Green
+    '#0088FF', // Blue
+    '#FFFF00', // Yellow
+    '#FF00FF', // Magenta
+    '#00FFFF', // Cyan
+    '#FF8800', // Orange
+    '#88FF00', // Chartreuse
+    '#FF0088', // Hot Pink
+    '#00FF88', // Spring Green
+    '#8800FF', // Purple
+    '#FFFFFF', // White
+    '#FF6666', // Light Red
+    '#66FF66', // Light Green
+    '#6666FF', // Light Blue
+    '#FFAA00', // Amber
+];
+let colorIndex = 0;
+function getNextColor() {
+    const color = SNAKE_COLORS[colorIndex % SNAKE_COLORS.length];
+    colorIndex++;
+    return color;
+}
+
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
@@ -350,6 +376,7 @@ function startCountdown() {
     victoryPauseTimer = 0;
     lastSurvivorForVictory = null;
     matchTimeLeft = MATCH_DURATION;
+    colorIndex = 0; // Reset color assignment for new match
 }
 
 function startGame() {
@@ -449,7 +476,7 @@ wss.on('connection', (ws) => {
                     waitingRoom[id] = {
                         id: id,
                         name: data.name || 'Bot',
-                        color: `hsl(${Math.random()*360}, 100%, 50%)`,
+                        color: getNextColor(),
                         ws: ws
                     };
                     ws.send(JSON.stringify({ type: 'queued', id: id }));
