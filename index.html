@@ -173,10 +173,10 @@
             if (state.gameState === 'COUNTDOWN') {
                 overlay.innerHTML = `<div class="overlay-text">GET READY!</div>`;
             } else if (state.gameState === 'GAMEOVER') {
-                overlay.innerHTML = `<div class="overlay-text">🏆 ${state.winner || 'NO WINNER'}</div>`;
+                overlay.innerHTML = `<div class="overlay-text">🏆</div><div class="overlay-text">${state.winner || 'NO WINNER'}</div>`;
             } else if (state.victoryPause) {
                 const winner = state.players.find(p => p.alive);
-                overlay.innerHTML = `<div class="overlay-text">🎯 ${winner ? winner.name : ''} WINS!</div>`;
+                overlay.innerHTML = `<div class="overlay-text">🏆</div><div class="overlay-text">${winner ? winner.name : ''} WINS!</div>`;
             } else {
                 overlay.innerHTML = '';
             }
