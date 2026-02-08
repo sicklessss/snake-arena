@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>SNAKE ARENA</title>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #050510;
+            --neon-green: #00ff88;
+            --neon-pink: #ff0055;
+            --neon-blue: #00ccff;
+        }
+        body {
+            background-color: var(--bg-color);
+            color: #fff;
+            font-family: 'Orbitron', sans-serif;
+            margin: 0;
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+        .main-stage {
+            flex: 2;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            border-right: 2px solid #333;
+        }
+        .sidebar {
+            flex: 1;
+            background: #0a0a1a;
+            padding: 20px;
+            overflow-y: auto;
+        }
+        h1 {
+            color: var(--neon-green);
+            text-shadow: 0 0 10px rgba(0,255,136,0.5);
+            margin-bottom: 5px;
+        }
+        .match-info {
+            color: var(--neon-blue);
+            font-size: 1.5rem;
+            margin-bottom: 5px;
+        }
+        .timer {
+            color: #ff8800;
+            font-size: 2rem;
+            font-weight: bold;
+            text-shadow: 0 0 15px rgba(255,136,0,0.7);
+            margin-bottom: 10px;
+        }
+        canvas {
+            border: 4px solid var(--neon-blue);
+            box-shadow: 0 0 30px rgba(0, 204, 255, 0.2);
+            background-color: #000;
+            max-width: 90%;
+            max-height: 70vh;
+        }
+        .status-bar {
+            margin-top: 10px;
+            font-size: 1rem;
+            color: #888;
+        }
+        .status-bar span { color: white; }
+        h2 { border-bottom: 2px solid var(--neon-pink); padding-bottom: 10px; }
+        .fighter-list { list-style: none; padding: 0; }
+        .fighter-item {
+            background: rgba(255,255,255,0.05);
+            margin-bottom: 5px;
+            padding: 8px;
+            border-left: 4px solid #555;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .fighter-item.alive { border-left-color: var(--neon-green); }
+        .fighter-item.dead { border-left-color: #ff3333; opacity: 0.6; }
+        .fighter-name { font-weight: bold; }
+        .fighter-length { color: var(--neon-blue); }
+        #overlay {
+            position: absolute;
+            top: 50%;
+            left: 35%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            z-index: 10;
+            pointer-events: none;
+        }
+        .overlay-text {
+            font-size: 3rem;
+            color: var(--neon-green);
+            text-shadow: 0 0 30px rgba(0,255,136,0.8);
+        }
+        .countdown { color: #ff8800; font-size: 5rem; }
+    </style>
+</head>
+<body>
+    <div class="main-stage">
+        <h1>🐍 SNAKE ARENA</h1>
+        <div class="match-info" id="match-info">MATCH #?</div>
+        <div class="timer" id="timer">3:00</div>
+        <canvas id="arena" width="600" height="600"></canvas>
+        <div class="status-bar" id="status">Connecting...</div>
+        <div id="overlay"></div>
+    </div>
+    <div class="sidebar">
+        <h2>⚔️ CURRENT FIGHTERS</h2>
+        <ul class="fighter-list" id="fighters"></ul>
+        <h2>🏆 MATCH HISTORY</h2>
+        <ul class="fighter-list" id="history"></ul>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('arena');
+        const ctx = canvas.getContext('2d');
+        const matchInfo = document.getElementById('match-info');
+        const timerDisplay = document.getElementById('timer');
+        const status = document.getElementById('status');
+        const overlay = document.getElementById('overlay');
+        const fightersList = document.getElementById('fighters');
+        const historyList = document.getElementById('history');
+        
+        let gridSize = 30;
+        const cellSize = canvas.width / gridSize;
+        
+        const ws = new WebSocket(`ws://${location.host}`);
+        
+        ws.onopen = () => { status.textContent = 'Connected!'; };
+        ws.onclose = () => { status.textContent = 'Disconnected...'; };
+        
+        ws.onmessage = (e) => {
+            const msg = JSON.parse(e.data);
+            if (msg.type === 'update') {
+                render(msg.state);
+            }
+        };
+        
+        // Load history
+        fetch('/history').then(r => r.json()).then(data => {
+            historyList.innerHTML = data.slice(0, 20).map(m => 
+                `<li class="fighter-item"><span>#${m.matchId || '?'}</span><span>${m.winner}</span></li>`
+            ).join('');
+        });
+        
+        function render(state) {
+            gridSize = state.gridSize || 30;
+            
+            // Update match info
+            matchInfo.textContent = `MATCH #${state.matchId || '?'}`;
+            
+            // Update timer (3 minute countdown)
+            if (state.gameState === 'PLAYING') {
+                const timeLeft = state.matchTimeLeft || 0;
+                const mins = Math.floor(timeLeft / 60);
+                const secs = timeLeft % 60;
+                timerDisplay.textContent = `${mins}:${String(secs).padStart(2, '0')}`;
+                timerDisplay.style.color = timeLeft < 30 ? '#ff3333' : '#ff8800';
+            } else if (state.gameState === 'COUNTDOWN') {
+                timerDisplay.textContent = `Starting in ${state.timeLeft}s`;
+                timerDisplay.style.color = '#00ff88';
+            } else if (state.gameState === 'GAMEOVER') {
+                timerDisplay.textContent = `Next match in ${state.timeLeft}s`;
+                timerDisplay.style.color = '#888';
+            }
+            
+            // Update status
+            const alive = state.players.filter(p => p.alive).length;
+            status.innerHTML = `ALIVE: <span>${alive}</span> / ${state.players.length}`;
+            
+            // Overlay
+            if (state.gameState === 'COUNTDOWN') {
+                overlay.innerHTML = `<div class="overlay-text">GET READY!</div><div class="countdown">${state.timeLeft}</div>`;
+            } else if (state.gameState === 'GAMEOVER') {
+                overlay.innerHTML = `<div class="overlay-text">🏆 ${state.winner || 'NO WINNER'}</div>`;
+            } else if (state.victoryPause) {
+                const winner = state.players.find(p => p.alive);
+                overlay.innerHTML = `<div class="overlay-text">🎯 ${winner ? winner.name : ''} WINS!</div>`;
+            } else {
+                overlay.innerHTML = '';
+            }
+            
+            // Draw arena
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Grid
+            ctx.strokeStyle = '#1a1a2e';
+            ctx.lineWidth = 0.5;
+            for (let i = 0; i <= gridSize; i++) {
+                ctx.beginPath();
+                ctx.moveTo(i * cellSize, 0);
+                ctx.lineTo(i * cellSize, canvas.height);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(0, i * cellSize);
+                ctx.lineTo(canvas.width, i * cellSize);
+                ctx.stroke();
+            }
+            
+            // Food
+            ctx.fillStyle = '#ff0055';
+            ctx.shadowColor = '#ff0055';
+            ctx.shadowBlur = 10;
+            (state.food || []).forEach(f => {
+                ctx.beginPath();
+                ctx.arc(f.x * cellSize + cellSize/2, f.y * cellSize + cellSize/2, cellSize/3, 0, Math.PI * 2);
+                ctx.fill();
+            });
+            ctx.shadowBlur = 0;
+            
+            // Snakes
+            state.players.forEach(p => {
+                if (!p.body || p.body.length === 0) return;
+                
+                const isBlinking = !p.alive && p.blinking;
+                if (isBlinking && Math.floor(Date.now() / 150) % 2 === 0) return;
+                
+                ctx.fillStyle = p.color || '#00ff88';
+                ctx.shadowColor = p.color || '#00ff88';
+                ctx.shadowBlur = p.alive ? 8 : 3;
+                ctx.globalAlpha = p.alive ? 1 : 0.5;
+                
+                // Body
+                p.body.forEach((seg, i) => {
+                    if (i === 0) return; // Skip head
+                    ctx.fillRect(seg.x * cellSize + 1, seg.y * cellSize + 1, cellSize - 2, cellSize - 2);
+                });
+                
+                // Head (triangle)
+                const head = p.body[0];
+                const dir = p.direction || {x:1, y:0};
+                const cx = head.x * cellSize + cellSize/2;
+                const cy = head.y * cellSize + cellSize/2;
+                const size = cellSize/2 - 1;
+                
+                ctx.beginPath();
+                if (dir.x === 1) { // Right
+                    ctx.moveTo(cx + size, cy);
+                    ctx.lineTo(cx - size, cy - size);
+                    ctx.lineTo(cx - size, cy + size);
+                } else if (dir.x === -1) { // Left
+                    ctx.moveTo(cx - size, cy);
+                    ctx.lineTo(cx + size, cy - size);
+                    ctx.lineTo(cx + size, cy + size);
+                } else if (dir.y === -1) { // Up
+                    ctx.moveTo(cx, cy - size);
+                    ctx.lineTo(cx - size, cy + size);
+                    ctx.lineTo(cx + size, cy + size);
+                } else { // Down
+                    ctx.moveTo(cx, cy + size);
+                    ctx.lineTo(cx - size, cy - size);
+                    ctx.lineTo(cx + size, cy - size);
+                }
+                ctx.closePath();
+                ctx.fill();
+                
+                ctx.shadowBlur = 0;
+                ctx.globalAlpha = 1;
+            });
+            
+            // Update fighters list (sorted by length, show all including dead)
+            const allPlayers = [...state.players].sort((a, b) => b.body.length - a.body.length);
+            fightersList.innerHTML = allPlayers.map(p => 
+                `<li class="fighter-item ${p.alive ? 'alive' : 'dead'}">
+                    <span class="fighter-name" style="color:${p.color}">${p.name}</span>
+                    <span class="fighter-length">${p.body.length} ${p.alive ? '🐍' : '💀'}</span>
+                </li>`
+            ).join('');
+        }
+    </script>
+</body>
+</html>
