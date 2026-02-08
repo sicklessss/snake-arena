@@ -634,6 +634,16 @@ wss.on('connection', (ws, req) => {
     let playerId = null;
     let room = null;
 
+    // auto-attach spectators by arenaId
+    try {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const arenaId = url.searchParams.get('arenaId');
+        if (arenaId && rooms.has(arenaId)) {
+            room = rooms.get(arenaId);
+            room.clients.add(ws);
+        }
+    } catch (e) {}
+
     ws.on('message', (msg) => {
         try {
             const data = JSON.parse(msg);
