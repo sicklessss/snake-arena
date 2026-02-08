@@ -251,18 +251,34 @@
     </div>
 
         <script type="module">
-        import { createConfig } from 'https://cdn.jsdelivr.net/npm/wagmi@2.12.4/+esm';
-        import { connect, disconnect, getAccount, watchAccount, getBalance, switchChain } from 'https://cdn.jsdelivr.net/npm/wagmi@2.12.4/actions/+esm';
-        import { injected } from 'https://cdn.jsdelivr.net/npm/wagmi@2.12.4/connectors/+esm';
-        import { http, createPublicClient, formatEther } from 'https://cdn.jsdelivr.net/npm/viem@2.21.0/+esm';
-        import { baseSepolia } from 'https://cdn.jsdelivr.net/npm/viem@2.21.0/chains/+esm';
+        let wagmiConfig = null;
+        let wagmi = null;
+        let viem = null;
+        let chain = null;
 
-        const wagmiConfig = createConfig({
-            chains: [baseSepolia],
-            connectors: [injected()],
-            transports: { [baseSepolia.id]: http() }
-        });
-        const publicClient = createPublicClient({ chain: baseSepolia, transport: http() });
+        async function initWalletLibs() {
+            try {
+                const wagmiMod = await import('https://cdn.jsdelivr.net/npm/wagmi@2.12.4/+esm');
+                const wagmiActions = await import('https://cdn.jsdelivr.net/npm/wagmi@2.12.4/actions/+esm');
+                const wagmiConnectors = await import('https://cdn.jsdelivr.net/npm/wagmi@2.12.4/connectors/+esm');
+                const viemMod = await import('https://cdn.jsdelivr.net/npm/viem@2.21.0/+esm');
+                const viemChains = await import('https://cdn.jsdelivr.net/npm/viem@2.21.0/chains/+esm');
+
+                wagmi = { ...wagmiMod, ...wagmiActions, ...wagmiConnectors };
+                viem = viemMod;
+                chain = viemChains.baseSepolia;
+
+                wagmiConfig = wagmi.createConfig({
+                    chains: [chain],
+                    connectors: [wagmi.injected()],
+                    transports: { [chain.id]: viem.http() }
+                });
+                return true;
+            } catch (e) {
+                console.warn('wallet libs load failed', e);
+                return false;
+            }
+        }
 
         const canvas = document.getElementById('arena');
         const ctx = canvas.getContext('2d');
@@ -428,7 +444,13 @@
         }
 
         async function refreshWallet() {
-            const account = getAccount(wagmiConfig);
+            if (!wagmiConfig || !wagmi) {
+                walletStatusEl.textContent = '钱包未就绪';
+                walletBalanceEl.textContent = '--';
+                walletBtn.textContent = '连接钱包';
+                return;
+            }
+            const account = wagmi.getAccount(wagmiConfig);
             if (!account.isConnected) {
                 walletStatusEl.textContent = '未连接';
                 walletBalanceEl.textContent = '--';
@@ -436,21 +458,27 @@
                 return;
             }
             walletStatusEl.textContent = shortAddr(account.address);
-            const bal = await getBalance(wagmiConfig, { address: account.address, chainId: baseSepolia.id });
-            walletBalanceEl.textContent = formatEther(bal.value).slice(0, 8) + ' ETH';
+            const bal = await wagmi.getBalance(wagmiConfig, { address: account.address, chainId: chain.id });
+            walletBalanceEl.textContent = viem.formatEther(bal.value).slice(0, 8) + ' ETH';
             walletBtn.textContent = '断开钱包';
         }
 
-        watchAccount(wagmiConfig, { onChange: refreshWallet });
-        refreshWallet();
+        (async () => {
+            const ok = await initWalletLibs();
+            if (ok) {
+                wagmi.watchAccount(wagmiConfig, { onChange: refreshWallet });
+                refreshWallet();
+            }
+        })();
 
         walletBtn.onclick = async () => {
-            const account = getAccount(wagmiConfig);
+            if (!wagmiConfig || !wagmi) return alert('钱包库加载失败，请刷新页面');
+            const account = wagmi.getAccount(wagmiConfig);
             if (!account.isConnected) {
-                await connect(wagmiConfig, { connector: injected() });
-                await switchChain(wagmiConfig, { chainId: baseSepolia.id });
+                await wagmi.connect(wagmiConfig, { connector: wagmi.injected() });
+                await wagmi.switchChain(wagmiConfig, { chainId: chain.id });
             } else {
-                await disconnect(wagmiConfig);
+                await wagmi.disconnect(wagmiConfig);
             }
             refreshWallet();
         };
