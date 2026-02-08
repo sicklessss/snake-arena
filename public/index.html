@@ -78,6 +78,22 @@
             border-radius: 8px;
             border: 1px solid #202038;
         }
+        .panel-card input, .panel-card button {
+            width: 100%;
+            margin-top: 6px;
+            padding: 8px;
+            border-radius: 6px;
+            border: 1px solid #2a2a3a;
+            background: #0b0b16;
+            color: #fff;
+            font-family: 'Orbitron', sans-serif;
+        }
+        .panel-card button {
+            cursor: pointer;
+            background: var(--neon-blue);
+            color: #000;
+            font-weight: 700;
+        }
         .panel-row {
             display: flex;
             justify-content: space-between;
@@ -176,18 +192,22 @@
                 <div class="panel-section">
                     <h3>🤖 Bot 管理</h3>
                     <div class="panel-card">
-                        <div class="panel-row"><span>我的 Bot</span><span>0</span></div>
-                        <div class="panel-row"><span>价格设置</span><span>--</span></div>
-                        <div class="muted">上传 / 购买 / 定价入口（待接入）</div>
+                        <div class="panel-row"><span>我的 Bot</span><span id="my-bot-id">--</span></div>
+                        <input id="bot-name" placeholder="Bot 名称" />
+                        <input id="bot-price" placeholder="售价 (ETH)" />
+                        <button id="bot-register">注册 Bot</button>
+                        <div class="muted" id="bot-status">未注册</div>
                     </div>
                 </div>
 
                 <div class="panel-section">
                     <h3>🎭 表演场操作</h3>
                     <div class="panel-card">
-                        <div class="panel-row"><span>剩余场次</span><span>--</span></div>
-                        <div class="panel-row"><span>续费</span><span>0.01 ETH</span></div>
-                        <div class="panel-row"><span>挤人</span><span>0.02 ETH</span></div>
+                        <div class="panel-row"><span>剩余场次</span><span id="bot-credits">--</span></div>
+                        <input id="topup-amount" placeholder="续费金额 (默认0.01)" />
+                        <button id="topup-btn">续费 0.01 ETH</button>
+                        <button id="join-btn">申请入场</button>
+                        <div class="muted" id="join-status">--</div>
                     </div>
                 </div>
 
@@ -302,6 +322,79 @@
         });
 
         setView('performance');
+
+        // --- UI Wiring (MVP) ---
+        const botIdEl = document.getElementById('my-bot-id');
+        const botNameEl = document.getElementById('bot-name');
+        const botPriceEl = document.getElementById('bot-price');
+        const botStatusEl = document.getElementById('bot-status');
+        const creditsEl = document.getElementById('bot-credits');
+        const topupAmountEl = document.getElementById('topup-amount');
+        const joinStatusEl = document.getElementById('join-status');
+
+        let myBotId = localStorage.getItem('myBotId') || '';
+        if (myBotId) {
+            botIdEl.textContent = myBotId;
+            refreshBot();
+        }
+
+        async function refreshBot() {
+            if (!myBotId) return;
+            const res = await fetch('/api/bot/' + myBotId);
+            if (!res.ok) return;
+            const bot = await res.json();
+            botIdEl.textContent = bot.id;
+            creditsEl.textContent = bot.credits;
+            botStatusEl.textContent = '已注册';
+        }
+
+        document.getElementById('bot-register').onclick = async () => {
+            const name = botNameEl.value || 'AgentBot';
+            const price = parseFloat(botPriceEl.value || '0');
+            const res = await fetch('/api/bot/register', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, price, botType: 'agent' })
+            });
+            const data = await res.json();
+            if (data.id) {
+                myBotId = data.id;
+                localStorage.setItem('myBotId', myBotId);
+                botIdEl.textContent = myBotId;
+                botStatusEl.textContent = '注册成功';
+                creditsEl.textContent = data.credits;
+            }
+        };
+
+        document.getElementById('topup-btn').onclick = async () => {
+            if (!myBotId) return alert('先注册 Bot');
+            const amount = parseFloat(topupAmountEl.value || '0.01');
+            const res = await fetch('/api/bot/topup', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ botId: myBotId, amount })
+            });
+            const data = await res.json();
+            if (data.credits !== undefined) {
+                creditsEl.textContent = data.credits;
+                joinStatusEl.textContent = '续费成功';
+            }
+        };
+
+        document.getElementById('join-btn').onclick = async () => {
+            if (!myBotId) return alert('先注册 Bot');
+            const res = await fetch('/api/arena/join', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ botId: myBotId, arenaType: currentView || 'performance' })
+            });
+            const data = await res.json();
+            if (data.arenaId) {
+                joinStatusEl.textContent = '已分配到: ' + data.arenaId;
+            } else {
+                joinStatusEl.textContent = data.error || '加入失败';
+            }
+        };
 
         function render(state) {
             gridSize = state.gridSize || 30;
