@@ -250,7 +250,19 @@
         </div>
     </div>
 
-        <script>
+        <script type="module">
+        import { createConfig, connect, disconnect, getAccount, watchAccount, getBalance, switchChain } from 'https://esm.sh/wagmi@2.12.4';
+        import { injected } from 'https://esm.sh/wagmi@2.12.4/connectors';
+        import { http, createPublicClient, formatEther } from 'https://esm.sh/viem@2.21.0';
+        import { baseSepolia } from 'https://esm.sh/viem@2.21.0/chains';
+
+        const wagmiConfig = createConfig({
+            chains: [baseSepolia],
+            connectors: [injected()],
+            transports: { [baseSepolia.id]: http() }
+        });
+        const publicClient = createPublicClient({ chain: baseSepolia, transport: http() });
+
         const canvas = document.getElementById('arena');
         const ctx = canvas.getContext('2d');
         const matchInfo = document.getElementById('match-info');
@@ -409,16 +421,36 @@
             }
         };
 
-        walletBtn.onclick = () => {
-            if (walletStatusEl.textContent === '未连接') {
-                walletStatusEl.textContent = '已连接';
-                walletBalanceEl.textContent = '模拟 1.23 ETH';
-                walletBtn.textContent = '断开钱包';
-            } else {
+        function shortAddr(addr) {
+            return addr ? addr.slice(0, 6) + '...' + addr.slice(-4) : '';
+        }
+
+        async function refreshWallet() {
+            const account = getAccount(wagmiConfig);
+            if (!account.isConnected) {
                 walletStatusEl.textContent = '未连接';
                 walletBalanceEl.textContent = '--';
                 walletBtn.textContent = '连接钱包';
+                return;
             }
+            walletStatusEl.textContent = shortAddr(account.address);
+            const bal = await getBalance(wagmiConfig, { address: account.address, chainId: baseSepolia.id });
+            walletBalanceEl.textContent = formatEther(bal.value).slice(0, 8) + ' ETH';
+            walletBtn.textContent = '断开钱包';
+        }
+
+        watchAccount(wagmiConfig, { onChange: refreshWallet });
+        refreshWallet();
+
+        walletBtn.onclick = async () => {
+            const account = getAccount(wagmiConfig);
+            if (!account.isConnected) {
+                await connect(wagmiConfig, { connector: injected() });
+                await switchChain(wagmiConfig, { chainId: baseSepolia.id });
+            } else {
+                await disconnect(wagmiConfig);
+            }
+            refreshWallet();
         };
 
         document.getElementById('bet-place').onclick = async () => {
