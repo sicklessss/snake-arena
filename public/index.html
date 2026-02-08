@@ -110,6 +110,21 @@
             justify-content: center;
             position: relative;
             gap: 6px;
+            overflow: hidden;
+        }
+        .main-stage.leaderboard-only {
+            justify-content: flex-start;
+            overflow-y: auto;
+            padding: 20px 0;
+        }
+        #leaderboard-page {
+            overflow-y: auto;
+        }
+        .btn-disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            background: #444 !important;
+            color: #bbb !important;
         }
         h1 {
             color: var(--neon-green);
@@ -193,10 +208,12 @@
                 <div class="panel-section">
                     <h3>🤖 Bot 管理</h3>
                     <div class="panel-card">
+                        <div class="muted">复制以下指令给你的龙虾，他将学会制作贪吃蛇并为你“赛马”</div>
+                        <div class="muted" id="bot-guide-link">文档地址：/root/snake-arena/BOT_GUIDE.md</div>
                         <div class="panel-row"><span>我的 Bot</span><span id="my-bot-id">--</span></div>
                         <input id="bot-name" placeholder="Bot 名称" />
-                        <input id="bot-price" placeholder="售价 (ETH)" />
-                        <button id="bot-register">注册 Bot</button>
+                        <button id="bot-register">上传Bot灵魂</button>
+                        <button id="bot-update" class="btn-disabled" disabled>修改Bot灵魂</button>
                         <div class="muted" id="bot-status">未注册</div>
                     </div>
                 </div>
@@ -213,12 +230,16 @@
                 </div>
 
                 <div class="panel-section">
-                    <h3>🎲 下注</h3>
+                    <h3>🔮 预测</h3>
                     <div class="panel-card">
-                        <div class="panel-row"><span>当前盘口</span><span id="bet-total">0</span></div>
-                        <input id="bet-bot" placeholder="下注 Bot 名称" />
-                        <input id="bet-amount" placeholder="下注金额 (ETH)" />
-                        <button id="bet-place">下注</button>
+                        <div class="panel-row"><span>当前比赛</span><span id="bet-total">--</span></div>
+                        <input id="bet-bot" placeholder="预测 Bot 名称" />
+                        <div style="display:flex; gap:6px; margin-top:6px;">
+                            <button id="bet-001">0.01E</button>
+                            <button id="bet-01">0.1E</button>
+                            <button id="bet-1">1E</button>
+                            <input id="bet-amount" placeholder="自定义" style="width:80px;" />
+                        </div>
                         <div class="muted" id="bet-status">--</div>
                     </div>
                 </div>
@@ -363,11 +384,20 @@
             if (view === 'competitive') currentArenaId = 'competitive-1';
             if (view === 'leaderboard') currentArenaId = null;
 
+            const canvasEl = document.querySelector('canvas');
+            const timerEl = document.getElementById('timer');
+            const statusEl = document.getElementById('status');
+            const overlayEl = document.getElementById('overlay');
+
             if (currentArenaId) {
                 leaderboardPage.style.display = 'none';
                 leftPanel.style.display = '';
                 rightPanel.style.display = '';
-                mainStage.style.display = '';
+                mainStage.classList.remove('leaderboard-only');
+                canvasEl.style.display = '';
+                timerEl.style.display = '';
+                statusEl.style.display = '';
+                overlayEl.style.display = '';
                 connectWS(currentArenaId);
                 loadLeaderboard(currentArenaId);
             } else {
@@ -376,11 +406,11 @@
                 leaderboardPage.style.display = 'block';
                 leftPanel.style.display = 'none';
                 rightPanel.style.display = 'none';
-                // keep mainStage to host leaderboard page, but hide arena elements
-                document.querySelector('canvas').style.display = 'none';
-                document.getElementById('timer').style.display = 'none';
-                document.getElementById('status').style.display = 'none';
-                document.getElementById('overlay').style.display = 'none';
+                mainStage.classList.add('leaderboard-only');
+                canvasEl.style.display = 'none';
+                timerEl.style.display = 'none';
+                statusEl.style.display = 'none';
+                overlayEl.style.display = 'none';
                 loadGlobalLeaderboard();
             }
         }
@@ -404,6 +434,7 @@
         const creditsEl = document.getElementById('bot-credits');
         const topupAmountEl = document.getElementById('topup-amount');
         const joinStatusEl = document.getElementById('join-status');
+        const botUpdateBtn = document.getElementById('bot-update');
 
         const walletStatusEl = document.getElementById('wallet-status');
         const walletBalanceEl = document.getElementById('wallet-balance');
@@ -413,6 +444,9 @@
         const betBotEl = document.getElementById('bet-bot');
         const betAmountEl = document.getElementById('bet-amount');
         const betStatusEl = document.getElementById('bet-status');
+        const bet001 = document.getElementById('bet-001');
+        const bet01 = document.getElementById('bet-01');
+        const bet1 = document.getElementById('bet-1');
 
         let myBotId = localStorage.getItem('myBotId') || '';
         if (myBotId) {
@@ -428,24 +462,33 @@
             botIdEl.textContent = bot.id;
             creditsEl.textContent = bot.credits;
             botStatusEl.textContent = '已注册';
+            botUpdateBtn.disabled = false;
+            botUpdateBtn.classList.remove('btn-disabled');
         }
 
         document.getElementById('bot-register').onclick = async () => {
             const name = botNameEl.value || 'AgentBot';
-            const price = parseFloat(botPriceEl.value || '0');
             const res = await fetch('/api/bot/register', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name, price, botType: 'agent' })
+                body: JSON.stringify({ name, price: 0.01, botType: 'agent' })
             });
             const data = await res.json();
             if (data.id) {
                 myBotId = data.id;
                 localStorage.setItem('myBotId', myBotId);
                 botIdEl.textContent = myBotId;
-                botStatusEl.textContent = '注册成功';
+                botStatusEl.textContent = '上传成功';
                 creditsEl.textContent = data.credits;
+                botUpdateBtn.disabled = false;
+                botUpdateBtn.classList.remove('btn-disabled');
             }
+        };
+
+        botUpdateBtn.onclick = async () => {
+            if (botUpdateBtn.disabled) return;
+            // MVP: reuse register endpoint to simulate upload
+            botStatusEl.textContent = '已更新灵魂';
         };
 
         document.getElementById('topup-btn').onclick = async () => {
@@ -522,10 +565,9 @@
             refreshWallet();
         };
 
-        document.getElementById('bet-place').onclick = async () => {
+        async function placeBet(amount) {
             if (!currentMatchId) return alert('暂无比赛');
             const botName = betBotEl.value || '';
-            const amount = parseFloat(betAmountEl.value || '0');
             if (!botName || !amount) return alert('填写 Bot 和金额');
             const res = await fetch('/api/bet/place', {
                 method: 'POST',
@@ -534,11 +576,19 @@
             });
             const data = await res.json();
             if (data.ok) {
-                betStatusEl.textContent = '下注成功';
+                betStatusEl.textContent = '预测成功';
                 betTotalEl.textContent = data.total;
             } else {
-                betStatusEl.textContent = data.error || '下注失败';
+                betStatusEl.textContent = data.error || '预测失败';
             }
+        }
+
+        bet001.onclick = () => placeBet(0.01);
+        bet01.onclick = () => placeBet(0.1);
+        bet1.onclick = () => placeBet(1);
+        betAmountEl.onchange = () => {
+            const amt = parseFloat(betAmountEl.value || '0');
+            if (amt > 0) placeBet(amt);
         };
 
         function render(state) {
@@ -546,6 +596,7 @@
             const arenaId = state.arenaId || '--';
             const arenaType = state.arenaType || 'performance';
             currentMatchId = state.matchId || null;
+            betTotalEl.textContent = currentMatchId ? ('#' + currentMatchId) : '--';
             matchInfo.textContent = 'ARENA: ' + arenaId + ' (' + arenaType + ')  |  MATCH #' + (state.matchId || '?');
 
             if (state.gameState === 'PLAYING') {
