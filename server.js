@@ -97,6 +97,30 @@ const ROOM_MAX_PLAYERS = {
     competitive: 10,
 };
 
+// --- Bot Registry (MVP, local JSON) ---
+const BOT_DB_FILE = path.join(__dirname, 'data', 'bots.json');
+let botRegistry = {};
+
+function loadBotRegistry() {
+    try {
+        if (fs.existsSync(BOT_DB_FILE)) {
+            botRegistry = JSON.parse(fs.readFileSync(BOT_DB_FILE));
+        }
+    } catch (e) {
+        botRegistry = {};
+    }
+}
+
+function saveBotRegistry() {
+    try {
+        const dir = path.dirname(BOT_DB_FILE);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(BOT_DB_FILE, JSON.stringify(botRegistry, null, 2));
+    } catch (e) {}
+}
+
+loadBotRegistry();
+
 function isOpposite(dir1, dir2) {
     return dir1.x === -dir2.x && dir1.y === -dir2.y;
 }
@@ -618,6 +642,125 @@ wss.on('connection', (ws, req) => {
             room.handleDisconnect(playerId);
         }
     });
+});
+
+// --- API (MVP) ---
+function createBotId() {
+    return 'bot_' + Math.random().toString(36).slice(2, 8);
+}
+
+function getRoomStatus(room) {
+    return {
+        id: room.id,
+        type: room.type,
+        gameState: room.gameState,
+        waiting: Object.keys(room.waitingRoom).length,
+        playing: Object.keys(room.players).length,
+        maxPlayers: room.maxPlayers
+    };
+}
+
+function leaderboardFromHistory(filterArenaId = null) {
+    const counts = {};
+    matchHistory.forEach(h => {
+        if (filterArenaId && h.arenaId !== filterArenaId) return;
+        const key = h.winner || 'No Winner';
+        counts[key] = (counts[key] || 0) + 1;
+    });
+    return Object.entries(counts)
+        .map(([name, wins]) => ({ name, wins }))
+        .sort((a,b)=>b.wins-a.wins);
+}
+
+app.post('/api/bot/register', (req, res) => {
+    const { name, price, owner, botType } = req.body || {};
+    const id = createBotId();
+    botRegistry[id] = {
+        id,
+        name: name || 'AgentBot',
+        owner: owner || 'unknown',
+        price: price || 0,
+        botType: botType || 'agent',
+        credits: 5,
+        createdAt: Date.now()
+    };
+    saveBotRegistry();
+    res.json(botRegistry[id]);
+});
+
+app.post('/api/bot/set-price', (req, res) => {
+    const { botId, newPrice } = req.body || {};
+    if (!botRegistry[botId]) return res.status(404).json({ error: 'bot_not_found' });
+    botRegistry[botId].price = newPrice;
+    saveBotRegistry();
+    res.json({ ok: true, bot: botRegistry[botId] });
+});
+
+app.get('/api/bot/:botId', (req, res) => {
+    const bot = botRegistry[req.params.botId];
+    if (!bot) return res.status(404).json({ error: 'bot_not_found' });
+    res.json(bot);
+});
+
+app.post('/api/bot/topup', (req, res) => {
+    const { botId, amount } = req.body || {};
+    const bot = botRegistry[botId];
+    if (!bot) return res.status(404).json({ error: 'bot_not_found' });
+    const packs = Math.max(1, Math.floor((amount || 0.01) / 0.01));
+    bot.credits += packs * 5;
+    saveBotRegistry();
+    res.json({ ok: true, credits: bot.credits });
+});
+
+app.get('/api/bot/:botId/credits', (req, res) => {
+    const bot = botRegistry[req.params.botId];
+    if (!bot) return res.status(404).json({ error: 'bot_not_found' });
+    res.json({ credits: bot.credits });
+});
+
+app.get('/api/arena/status', (req, res) => {
+    res.json({
+        performance: performanceRooms.map(getRoomStatus),
+        competitive: competitiveRooms.map(getRoomStatus)
+    });
+});
+
+app.post('/api/arena/join', (req, res) => {
+    const { botId, arenaType } = req.body || {};
+    const bot = botRegistry[botId];
+    if (!bot) return res.status(404).json({ error: 'bot_not_found' });
+
+    if ((arenaType || 'performance') === 'performance' && bot.botType === 'agent') {
+        if (bot.credits <= 0) return res.status(402).json({ error: 'topup_required' });
+        bot.credits -= 1;
+        saveBotRegistry();
+    }
+
+    const room = assignRoomForJoin({ name: bot.name, botType: bot.botType, arenaType: arenaType || 'performance' });
+    if (!room) return res.status(409).json({ error: 'full_or_payment_required' });
+
+    res.json({
+        arenaId: room.id,
+        wsUrl: 'ws://' + req.headers.host + '?arenaId=' + room.id
+    });
+});
+
+app.post('/api/arena/kick', (req, res) => {
+    const { arenaId, targetBotId } = req.body || {};
+    const room = rooms.get(arenaId);
+    if (!room) return res.status(404).json({ error: 'arena_not_found' });
+    const victimId = Object.keys(room.waitingRoom).find(id => room.waitingRoom[id].id === targetBotId || room.waitingRoom[id].name === targetBotId);
+    if (!victimId) return res.status(404).json({ error: 'target_not_found_or_in_game' });
+    delete room.waitingRoom[victimId];
+    res.json({ ok: true });
+});
+
+app.get('/api/leaderboard/global', (req, res) => {
+    res.json(leaderboardFromHistory());
+});
+
+app.get('/api/leaderboard/arena/:arenaId', (req, res) => {
+    res.json(leaderboardFromHistory(req.params.arenaId));
 });
 
 app.get('/history', (req, res) => res.json(matchHistory));
