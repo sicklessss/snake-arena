@@ -179,8 +179,8 @@
             <button class="tab" data-view="leaderboard">总排行榜</button>
         </header>
 
-        <div class="content">
-            <aside class="left-panel">
+        <div class="content" id="app-shell">
+            <aside class="left-panel" id="left-panel">
                 <div class="panel-section">
                     <h3>🔑 钱包</h3>
                     <div class="panel-card">
@@ -224,7 +224,7 @@
                 </div>
             </aside>
 
-            <main class="main-stage">
+            <main class="main-stage" id="main-stage">
                 <h1>🦀 SNAKE ARENA</h1>
                 <div class="match-info" id="match-info">ARENA: --</div>
                 <div class="timer" id="timer">3:00</div>
@@ -243,7 +243,7 @@
                 </div>
             </main>
 
-            <aside class="right-panel">
+            <aside class="right-panel" id="right-panel">
                 <div class="panel-section">
                     <h3>⚔️ 当前选手</h3>
                     <ul class="fighter-list" id="fighters"></ul>
@@ -299,6 +299,9 @@
         const matchSearchEl = document.getElementById('match-search');
         const matchSearchBtn = document.getElementById('match-search-btn');
         const matchSearchResult = document.getElementById('match-search-result');
+        const leftPanel = document.getElementById('left-panel');
+        const rightPanel = document.getElementById('right-panel');
+        const mainStage = document.getElementById('main-stage');
 
         let gridSize = 30;
         const cellSize = canvas.width / gridSize;
@@ -362,12 +365,22 @@
 
             if (currentArenaId) {
                 leaderboardPage.style.display = 'none';
+                leftPanel.style.display = '';
+                rightPanel.style.display = '';
+                mainStage.style.display = '';
                 connectWS(currentArenaId);
                 loadLeaderboard(currentArenaId);
             } else {
                 if (ws) ws.close();
                 matchInfo.textContent = 'GLOBAL LEADERBOARD';
                 leaderboardPage.style.display = 'block';
+                leftPanel.style.display = 'none';
+                rightPanel.style.display = 'none';
+                // keep mainStage to host leaderboard page, but hide arena elements
+                document.querySelector('canvas').style.display = 'none';
+                document.getElementById('timer').style.display = 'none';
+                document.getElementById('status').style.display = 'none';
+                document.getElementById('overlay').style.display = 'none';
                 loadGlobalLeaderboard();
             }
         }

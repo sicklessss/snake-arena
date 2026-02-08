@@ -1,6 +1,14 @@
 const WebSocket = require('ws');
 
-const BOT_NAME = process.argv[2] || 'SmartBot';
+const BOT_NAMES = [
+    'V', 'Johnny', 'Silverhand', 'Panam', 'Judy', 'Kerry', 'Alt', 'Rogue',
+    'NightCity', 'Arasaka', 'Militech', 'Sandevistan', 'Relic', 'NetWatch',
+    'VaultDweller', 'PipBoy', 'Nuka', 'Brotherhood', 'Enclave', 'VaultTec',
+    'GLaDOS', 'Aperture', 'Citadel', 'Reaper', 'Omni', 'Cortana', 'Halo',
+    'N7', 'Normandy', 'Shepard', 'EVE', 'Ishimura', 'Sprawl', 'Typhon',
+];
+const INSTANCE_ID = parseInt(process.env.NODE_APP_INSTANCE || '0', 10);
+const BOT_NAME = process.argv[2] || BOT_NAMES[INSTANCE_ID % BOT_NAMES.length] || 'SmartBot';
 const SERVER_URL = process.argv[3] || 'ws://localhost:3000';
 
 let ws = null;
