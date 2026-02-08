@@ -184,8 +184,9 @@
                 <div class="panel-section">
                     <h3>🔑 钱包</h3>
                     <div class="panel-card">
-                        <div class="panel-row"><span>状态</span><span>未连接</span></div>
-                        <div class="panel-row"><span>余额</span><span>--</span></div>
+                        <div class="panel-row"><span>状态</span><span id="wallet-status">未连接</span></div>
+                        <div class="panel-row"><span>余额</span><span id="wallet-balance">--</span></div>
+                        <button id="wallet-connect">连接钱包</button>
                     </div>
                 </div>
 
@@ -214,9 +215,11 @@
                 <div class="panel-section">
                     <h3>🎲 下注</h3>
                     <div class="panel-card">
-                        <div class="panel-row"><span>当前盘口</span><span>--</span></div>
-                        <div class="panel-row"><span>下注金额</span><span>--</span></div>
-                        <div class="muted">下注入口（待接入）</div>
+                        <div class="panel-row"><span>当前盘口</span><span id="bet-total">0</span></div>
+                        <input id="bet-bot" placeholder="下注 Bot 名称" />
+                        <input id="bet-amount" placeholder="下注金额 (ETH)" />
+                        <button id="bet-place">下注</button>
+                        <div class="muted" id="bet-status">--</div>
                     </div>
                 </div>
             </aside>
@@ -263,6 +266,7 @@
         let ws = null;
         let currentArenaId = 'performance-1';
         let currentView = 'performance';
+        let currentMatchId = null;
 
         function connectWS(arenaId) {
             if (ws) ws.close();
@@ -332,6 +336,15 @@
         const topupAmountEl = document.getElementById('topup-amount');
         const joinStatusEl = document.getElementById('join-status');
 
+        const walletStatusEl = document.getElementById('wallet-status');
+        const walletBalanceEl = document.getElementById('wallet-balance');
+        const walletBtn = document.getElementById('wallet-connect');
+
+        const betTotalEl = document.getElementById('bet-total');
+        const betBotEl = document.getElementById('bet-bot');
+        const betAmountEl = document.getElementById('bet-amount');
+        const betStatusEl = document.getElementById('bet-status');
+
         let myBotId = localStorage.getItem('myBotId') || '';
         if (myBotId) {
             botIdEl.textContent = myBotId;
@@ -396,10 +409,42 @@
             }
         };
 
+        walletBtn.onclick = () => {
+            if (walletStatusEl.textContent === '未连接') {
+                walletStatusEl.textContent = '已连接';
+                walletBalanceEl.textContent = '模拟 1.23 ETH';
+                walletBtn.textContent = '断开钱包';
+            } else {
+                walletStatusEl.textContent = '未连接';
+                walletBalanceEl.textContent = '--';
+                walletBtn.textContent = '连接钱包';
+            }
+        };
+
+        document.getElementById('bet-place').onclick = async () => {
+            if (!currentMatchId) return alert('暂无比赛');
+            const botName = betBotEl.value || '';
+            const amount = parseFloat(betAmountEl.value || '0');
+            if (!botName || !amount) return alert('填写 Bot 和金额');
+            const res = await fetch('/api/bet/place', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ matchId: currentMatchId, botId: botName, amount })
+            });
+            const data = await res.json();
+            if (data.ok) {
+                betStatusEl.textContent = '下注成功';
+                betTotalEl.textContent = data.total;
+            } else {
+                betStatusEl.textContent = data.error || '下注失败';
+            }
+        };
+
         function render(state) {
             gridSize = state.gridSize || 30;
             const arenaId = state.arenaId || '--';
             const arenaType = state.arenaType || 'performance';
+            currentMatchId = state.matchId || null;
             matchInfo.textContent = 'ARENA: ' + arenaId + ' (' + arenaType + ')  |  MATCH #' + (state.matchId || '?');
 
             if (state.gameState === 'PLAYING') {

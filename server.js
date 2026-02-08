@@ -799,6 +799,28 @@ app.get('/api/leaderboard/arena/:arenaId', (req, res) => {
     res.json(leaderboardFromHistory(req.params.arenaId));
 });
 
+// --- Betting (MVP, in-memory) ---
+const betPools = {}; // matchId -> { total, bets: [{botId, amount}] }
+
+app.post('/api/bet/place', (req, res) => {
+    const { matchId, botId, amount } = req.body || {};
+    if (!matchId || !botId || !amount) return res.status(400).json({ error: 'invalid' });
+    if (!betPools[matchId]) betPools[matchId] = { total: 0, bets: [] };
+    betPools[matchId].bets.push({ botId, amount: Number(amount) });
+    betPools[matchId].total += Number(amount);
+    res.json({ ok: true, total: betPools[matchId].total });
+});
+
+app.get('/api/bet/status', (req, res) => {
+    const matchId = req.query.matchId;
+    if (!matchId || !betPools[matchId]) return res.json({ total: 0, bets: [] });
+    res.json(betPools[matchId]);
+});
+
+app.post('/api/bet/claim', (req, res) => {
+    res.json({ ok: true });
+});
+
 app.get('/history', (req, res) => res.json(matchHistory));
 
 const PORT = process.env.PORT || 3000;
