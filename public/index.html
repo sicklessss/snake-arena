@@ -251,10 +251,10 @@
     </div>
 
         <script type="module">
-        import { createConfig, connect, disconnect, getAccount, watchAccount, getBalance, switchChain } from 'https://esm.sh/wagmi@2.12.4';
-        import { injected } from 'https://esm.sh/wagmi@2.12.4/connectors';
-        import { http, createPublicClient, formatEther } from 'https://esm.sh/viem@2.21.0';
-        import { baseSepolia } from 'https://esm.sh/viem@2.21.0/chains';
+        import { createConfig, connect, disconnect, getAccount, watchAccount, getBalance, switchChain } from 'https://cdn.jsdelivr.net/npm/wagmi@2.12.4/+esm';
+        import { injected } from 'https://cdn.jsdelivr.net/npm/wagmi@2.12.4/connectors/+esm';
+        import { http, createPublicClient, formatEther } from 'https://cdn.jsdelivr.net/npm/viem@2.21.0/+esm';
+        import { baseSepolia } from 'https://cdn.jsdelivr.net/npm/viem@2.21.0/chains/+esm';
 
         const wagmiConfig = createConfig({
             chains: [baseSepolia],
@@ -282,7 +282,8 @@
 
         function connectWS(arenaId) {
             if (ws) ws.close();
-            ws = new WebSocket('ws://' + location.host + '?arenaId=' + arenaId);
+            const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
+            ws = new WebSocket(wsProto + '://' + location.host + '?arenaId=' + arenaId);
             ws.onopen = () => { status.textContent = 'Connected!'; };
             ws.onclose = () => { status.textContent = 'Disconnected...'; };
             ws.onmessage = (e) => {
