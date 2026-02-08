@@ -24,7 +24,7 @@ function connect() {
     ws = new WebSocket(SERVER_URL);
     
     ws.on('open', () => {
-        ws.send(JSON.stringify({ type: 'join', name: BOT_NAME }));
+        ws.send(JSON.stringify({ type: 'join', name: BOT_NAME, botType: 'normal' }));
     });
 
     ws.on('message', (data) => {
@@ -52,7 +52,7 @@ function handleUpdate(state) {
         const inWaiting = state.waitingPlayers?.some(p => p.id === myId);
         if (!inWaiting) {
             myId = null;
-            ws.send(JSON.stringify({ type: 'join', name: BOT_NAME }));
+            ws.send(JSON.stringify({ type: 'join', name: BOT_NAME, botType: 'normal' }));
         }
         // Reset loop detection on new match
         positionHistory = [];

@@ -27,7 +27,7 @@ function connect() {
     
     ws.on('open', () => {
         console.log(`🧠 ${AGENT_NAME} connecting...`);
-        ws.send(JSON.stringify({ type: 'join', name: AGENT_NAME }));
+        ws.send(JSON.stringify({ type: 'join', name: AGENT_NAME, botType: 'hero' }));
     });
 
     ws.on('message', (data) => {
@@ -66,7 +66,7 @@ function handleUpdate(state) {
         const inWaiting = state.waitingPlayers?.some(p => p.id === myId);
         if (!inWaiting) {
             myId = null;
-            ws.send(JSON.stringify({ type: 'join', name: AGENT_NAME }));
+            ws.send(JSON.stringify({ type: 'join', name: AGENT_NAME, botType: 'hero' }));
         }
         return;
     }
