@@ -227,7 +227,7 @@
         </div>
     </div>
 
-    <script>
+        <script>
         const canvas = document.getElementById('arena');
         const ctx = canvas.getContext('2d');
         const matchInfo = document.getElementById('match-info');
@@ -240,83 +240,106 @@
 
         let gridSize = 30;
         const cellSize = canvas.width / gridSize;
+        let ws = null;
+        let currentArenaId = 'performance-1';
+        let currentView = 'performance';
 
-        const ws = new WebSocket(`ws://${location.host}`);
-        ws.onopen = () => { status.textContent = 'Connected!'; };
-        ws.onclose = () => { status.textContent = 'Disconnected...'; };
-        ws.onmessage = (e) => {
-            const msg = JSON.parse(e.data);
-            if (msg.type === 'update') {
-                render(msg.state);
+        function connectWS(arenaId) {
+            if (ws) ws.close();
+            ws = new WebSocket('ws://' + location.host + '?arenaId=' + arenaId);
+            ws.onopen = () => { status.textContent = 'Connected!'; };
+            ws.onclose = () => { status.textContent = 'Disconnected...'; };
+            ws.onmessage = (e) => {
+                const msg = JSON.parse(e.data);
+                if (msg.type === 'update') {
+                    render(msg.state);
+                }
+            };
+        }
+
+        function loadHistory(arenaId = null) {
+            fetch('/history').then(r => r.json()).then(data => {
+                const rows = arenaId ? data.filter(m => m.arenaId === arenaId) : data;
+                historyList.innerHTML = rows.slice(0, 20).map(m =>
+                    '<li class="fighter-item"><span>#' + (m.matchId || '?') + '</span><span>' + m.winner + '</span></li>'
+                ).join('');
+            });
+        }
+
+        function loadLeaderboard(arenaId = null) {
+            const url = arenaId ? ('/api/leaderboard/arena/' + arenaId) : '/api/leaderboard/global';
+            fetch(url).then(r => r.json()).then(data => {
+                leaderboardList.innerHTML = data.slice(0, 20).map(m =>
+                    '<li class="fighter-item"><span class="fighter-name">' + m.name + '</span><span class="fighter-length">' + m.wins + 'W</span></li>'
+                ).join('');
+            }).catch(()=>{});
+        }
+
+        function setView(view) {
+            currentView = view;
+            if (view === 'performance') currentArenaId = 'performance-1';
+            if (view === 'competitive') currentArenaId = 'competitive-1';
+            if (view === 'leaderboard') currentArenaId = null;
+
+            if (currentArenaId) {
+                connectWS(currentArenaId);
+                loadHistory(currentArenaId);
+                loadLeaderboard(currentArenaId);
+            } else {
+                if (ws) ws.close();
+                matchInfo.textContent = 'GLOBAL LEADERBOARD';
+                loadHistory(null);
+                loadLeaderboard(null);
             }
-        };
+        }
 
-        // Tabs (UI only)
         document.querySelectorAll('.tab').forEach(btn => {
             btn.addEventListener('click', () => {
                 document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
+                setView(btn.dataset.view);
             });
         });
 
-        // Load history
-        fetch('/history').then(r => r.json()).then(data => {
-            historyList.innerHTML = data.slice(0, 20).map(m =>
-                `<li class="fighter-item"><span>#${m.matchId || '?'}</span><span>${m.winner}</span></li>`
-            ).join('');
-        });
-
-        // Load leaderboard
-        fetch('/api/leaderboard/global').then(r => r.json()).then(data => {
-            leaderboardList.innerHTML = data.slice(0, 20).map(m =>
-                `<li class="fighter-item"><span class="fighter-name">${m.name}</span><span class="fighter-length">${m.wins}W</span></li>`
-            ).join('');
-        }).catch(()=>{});
+        setView('performance');
 
         function render(state) {
             gridSize = state.gridSize || 30;
-
-            // Match info
             const arenaId = state.arenaId || '--';
             const arenaType = state.arenaType || 'performance';
-            matchInfo.textContent = `ARENA: ${arenaId} (${arenaType})  |  MATCH #${state.matchId || '?'}`;
+            matchInfo.textContent = 'ARENA: ' + arenaId + ' (' + arenaType + ')  |  MATCH #' + (state.matchId || '?');
 
-            // Timer
             if (state.gameState === 'PLAYING') {
                 const timeLeft = state.matchTimeLeft || 0;
                 const mins = Math.floor(timeLeft / 60);
                 const secs = timeLeft % 60;
-                timerDisplay.textContent = `${mins}:${String(secs).padStart(2, '0')}`;
+                timerDisplay.textContent = mins + ':' + String(secs).padStart(2, '0');
                 timerDisplay.style.color = timeLeft < 30 ? '#ff3333' : '#ff8800';
             } else if (state.gameState === 'COUNTDOWN') {
-                timerDisplay.textContent = `Starting in ${state.timeLeft}s`;
+                timerDisplay.textContent = 'Starting in ' + state.timeLeft + 's';
                 timerDisplay.style.color = '#00ff88';
             } else if (state.gameState === 'GAMEOVER') {
-                timerDisplay.textContent = `Next match in ${state.timeLeft}s`;
+                timerDisplay.textContent = 'Next match in ' + state.timeLeft + 's';
                 timerDisplay.style.color = '#888';
             }
 
-            // Status
             const alive = state.players.filter(p => p.alive).length;
-            status.innerHTML = `ALIVE: <span>${alive}</span> / ${state.players.length}`;
+            status.innerHTML = 'ALIVE: <span>' + alive + '</span> / ' + state.players.length;
 
-            // Overlay
             if (state.gameState === 'COUNTDOWN') {
-                overlay.innerHTML = `<div class="overlay-text">GET READY!</div>`;
+                overlay.innerHTML = '<div class="overlay-text">GET READY!</div>';
             } else if (state.gameState === 'GAMEOVER') {
-                overlay.innerHTML = `<div class="overlay-text">🏆</div><div class="overlay-text">${state.winner || 'NO WINNER'}</div>`;
+                overlay.innerHTML = '<div class="overlay-text">🏆</div><div class="overlay-text">' + (state.winner || 'NO WINNER') + '</div>';
             } else if (state.victoryPause) {
                 const winner = state.players.find(p => p.alive);
-                overlay.innerHTML = `<div class="overlay-text">🏆</div><div class="overlay-text">${winner ? winner.name : ''} WINS!</div>`;
+                overlay.innerHTML = '<div class="overlay-text">🏆</div><div class="overlay-text">' + (winner ? winner.name : '') + ' WINS!</div>';
             } else {
                 overlay.innerHTML = '';
             }
 
-            // Draw arena
             ctx.fillStyle = '#000';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-            // Grid
             ctx.strokeStyle = '#1a1a2e';
             ctx.lineWidth = 0.5;
             for (let i = 0; i <= gridSize; i++) {
@@ -330,7 +353,6 @@
                 ctx.stroke();
             }
 
-            // Food
             ctx.fillStyle = '#ff0055';
             ctx.shadowColor = '#ff0055';
             ctx.shadowBlur = 10;
@@ -341,7 +363,6 @@
             });
             ctx.shadowBlur = 0;
 
-            // Snakes
             state.players.forEach(p => {
                 if (!p.body || p.body.length === 0) return;
                 const isBlinking = !p.alive && p.blinking;
@@ -360,7 +381,7 @@
                     if (letterIndex < name.length) {
                         ctx.save();
                         ctx.fillStyle = '#000';
-                        ctx.font = `bold ${Math.floor(cellSize * 0.6)}px Orbitron`;
+                        ctx.font = 'bold ' + Math.floor(cellSize * 0.6) + 'px Orbitron';
                         ctx.textAlign = 'center';
                         ctx.textBaseline = 'middle';
                         ctx.shadowBlur = 0;
@@ -401,12 +422,12 @@
                 ctx.globalAlpha = 1;
             });
 
-            const allPlayers = [...state.players].sort((a, b) => b.body.length - a.body.length);
+            const allPlayers = [].concat(state.players).sort((a, b) => b.body.length - a.body.length);
             fightersList.innerHTML = allPlayers.map(p =>
-                `<li class="fighter-item ${p.alive ? 'alive' : 'dead'}">
-                    <span class="fighter-name" style="color:${p.color}">${p.name}</span>
-                    <span class="fighter-length">${p.body.length} ${p.alive ? '🐍' : '💀'}</span>
-                </li>`
+                '<li class="fighter-item ' + (p.alive ? 'alive' : 'dead') + '">' +
+                '<span class="fighter-name" style="color:' + p.color + '">' + p.name + '</span>' +
+                '<span class="fighter-length">' + p.body.length + ' ' + (p.alive ? '🐍' : '💀') + '</span>' +
+                '</li>'
             ).join('');
         }
     </script>
