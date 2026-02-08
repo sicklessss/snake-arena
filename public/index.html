@@ -231,6 +231,16 @@
                 <canvas id="arena" width="600" height="600"></canvas>
                 <div class="status-bar" id="status">Connecting...</div>
                 <div id="overlay"></div>
+
+                <div id="leaderboard-page" style="display:none; width:90%; max-width:900px; margin-top:20px;">
+                    <h2 style="color:#fff; border-bottom:2px solid var(--neon-blue); padding-bottom:8px;">总排行榜 (Top 20)</h2>
+                    <div class="panel-card" style="margin-top:10px;">
+                        <input id="match-search" placeholder="输入比赛序号" />
+                        <button id="match-search-btn">搜索比赛</button>
+                        <div class="muted" id="match-search-result">--</div>
+                    </div>
+                    <ul class="fighter-list" id="leaderboard-global" style="margin-top:12px;"></ul>
+                </div>
             </main>
 
             <aside class="right-panel">
@@ -239,12 +249,8 @@
                     <ul class="fighter-list" id="fighters"></ul>
                 </div>
                 <div class="panel-section">
-                    <h3>🏆 Leaderboard</h3>
+                    <h3>🏆 Leaderboard (Top 10)</h3>
                     <ul class="fighter-list" id="leaderboard"></ul>
-                </div>
-                <div class="panel-section">
-                    <h3>📜 Match History</h3>
-                    <ul class="fighter-list" id="history"></ul>
                 </div>
             </aside>
         </div>
@@ -287,8 +293,12 @@
         const status = document.getElementById('status');
         const overlay = document.getElementById('overlay');
         const fightersList = document.getElementById('fighters');
-        const historyList = document.getElementById('history');
         const leaderboardList = document.getElementById('leaderboard');
+        const leaderboardPage = document.getElementById('leaderboard-page');
+        const leaderboardGlobal = document.getElementById('leaderboard-global');
+        const matchSearchEl = document.getElementById('match-search');
+        const matchSearchBtn = document.getElementById('match-search-btn');
+        const matchSearchResult = document.getElementById('match-search-result');
 
         let gridSize = 30;
         const cellSize = canvas.width / gridSize;
@@ -311,23 +321,38 @@
             };
         }
 
-        function loadHistory(arenaId = null) {
-            fetch('/history').then(r => r.json()).then(data => {
-                const rows = arenaId ? data.filter(m => m.arenaId === arenaId) : data;
-                historyList.innerHTML = rows.slice(0, 20).map(m =>
-                    '<li class="fighter-item"><span>#' + (m.matchId || '?') + '</span><span>' + m.winner + '</span></li>'
-                ).join('');
-            });
-        }
-
         function loadLeaderboard(arenaId = null) {
             const url = arenaId ? ('/api/leaderboard/arena/' + arenaId) : '/api/leaderboard/global';
             fetch(url).then(r => r.json()).then(data => {
-                leaderboardList.innerHTML = data.slice(0, 20).map(m =>
+                const list = data.slice(0, 10).map(m =>
+                    '<li class="fighter-item"><span class="fighter-name">' + m.name + '</span><span class="fighter-length">' + m.wins + 'W</span></li>'
+                ).join('');
+                leaderboardList.innerHTML = list;
+            }).catch(()=>{});
+        }
+
+        function loadGlobalLeaderboard() {
+            fetch('/api/leaderboard/global').then(r => r.json()).then(data => {
+                leaderboardGlobal.innerHTML = data.slice(0, 20).map(m =>
                     '<li class="fighter-item"><span class="fighter-name">' + m.name + '</span><span class="fighter-length">' + m.wins + 'W</span></li>'
                 ).join('');
             }).catch(()=>{});
         }
+
+        async function searchMatch() {
+            const id = (matchSearchEl.value || '').trim();
+            if (!id) return;
+            const res = await fetch('/history');
+            const data = await res.json();
+            const match = data.find(m => String(m.matchId) === String(id));
+            if (match) {
+                matchSearchResult.textContent = `#${match.matchId} Winner: ${match.winner} Score: ${match.score || 0}`;
+            } else {
+                matchSearchResult.textContent = '未找到该比赛';
+            }
+        }
+
+        matchSearchBtn.onclick = searchMatch;
 
         function setView(view) {
             currentView = view;
@@ -336,14 +361,14 @@
             if (view === 'leaderboard') currentArenaId = null;
 
             if (currentArenaId) {
+                leaderboardPage.style.display = 'none';
                 connectWS(currentArenaId);
-                loadHistory(currentArenaId);
                 loadLeaderboard(currentArenaId);
             } else {
                 if (ws) ws.close();
                 matchInfo.textContent = 'GLOBAL LEADERBOARD';
-                loadHistory(null);
-                loadLeaderboard(null);
+                leaderboardPage.style.display = 'block';
+                loadGlobalLeaderboard();
             }
         }
 
@@ -555,7 +580,7 @@
             }
 
             if (state.gameState === 'GAMEOVER') {
-                ctx.fillStyle = 'rgba(0,0,0,0.35)';
+                ctx.fillStyle = 'rgba(0,0,0,0.55)';
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
             }
 
