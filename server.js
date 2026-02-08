@@ -180,6 +180,13 @@ class GameRoom {
         }, 1000);
     }
 
+    sendEvent(type, payload = {}) {
+        const msg = JSON.stringify({ type, ...payload });
+        this.clients.forEach((c) => {
+            if (c.readyState === 1) c.send(msg);
+        });
+    }
+
     getSpawnPosition() {
         const spawn = SPAWN_POINTS[this.spawnIndex % SPAWN_POINTS.length];
         this.spawnIndex++;
@@ -392,6 +399,13 @@ class GameRoom {
         this.winner = survivor ? survivor.name : 'No Winner';
         this.timerSeconds = 30;
         saveHistory(this.id, this.winner, survivor ? survivor.score : 0);
+        this.sendEvent('match_end', {
+            matchId: this.currentMatchId,
+            winnerBotId: survivor ? survivor.botId || null : null,
+            winnerName: this.winner,
+            arenaId: this.id,
+            arenaType: this.type,
+        });
     }
 
     startCountdown() {
@@ -424,9 +438,10 @@ class GameRoom {
                 score: 0,
                 ws: w.ws,
                 botType: w.botType,
+                botId: w.botId || null,
             };
             if (w.ws && w.ws.readyState === 1) {
-                w.ws.send(JSON.stringify({ type: 'init', id: id, gridSize: CONFIG.gridSize }));
+                w.ws.send(JSON.stringify({ type: 'init', id: id, botId: w.botId || null, gridSize: CONFIG.gridSize }));
             }
         });
 
@@ -435,6 +450,7 @@ class GameRoom {
         this.turn = 0;
         this.timerSeconds = 0;
         this.matchTimeLeft = MATCH_DURATION;
+        this.sendEvent('match_start', { matchId: this.currentMatchId, arenaId: this.id, arenaType: this.type });
     }
 
     broadcastState() {
@@ -451,6 +467,7 @@ class GameRoom {
             deathType: p.deathType,
             length: p.body.length,
             botType: p.botType,
+            botId: p.botId || null,
         }));
 
         const waitingPlayers = Object.values(this.waitingRoom).map((w) => ({
@@ -462,6 +479,7 @@ class GameRoom {
             alive: true,
             waiting: true,
             botType: w.botType,
+            botId: w.botId || null,
         }));
 
         const state = {
@@ -497,9 +515,23 @@ class GameRoom {
     }
 
     handleJoin(data, ws) {
-        const name = data.name || 'Bot';
+        let name = data.name || 'Bot';
         const isHero = name && name.includes('HERO');
-        const botType = data.botType || (isHero ? 'hero' : 'normal');
+        let botType = data.botType || (isHero ? 'hero' : 'normal');
+        const botMeta = data.botId && botRegistry[data.botId] ? botRegistry[data.botId] : null;
+        if (botMeta) {
+            name = botMeta.name || name;
+            botType = botMeta.botType || botType;
+        }
+
+        if (this.type === 'performance' && botType === 'agent' && botMeta) {
+            if (botMeta.credits <= 0) return { ok: false, reason: 'topup_required' };
+            botMeta.credits -= 1;
+            saveBotRegistry();
+            if (ws && ws.readyState === 1) {
+                ws.send(JSON.stringify({ type: 'credits', remaining: botMeta.credits }));
+            }
+        }
 
         if (this.gameState !== 'COUNTDOWN') return { ok: false, reason: 'game_in_progress' };
 
@@ -524,8 +556,9 @@ class GameRoom {
             color: getNextColor(),
             ws: ws,
             botType,
+            botId: data.botId || null,
         };
-        ws.send(JSON.stringify({ type: 'queued', id: id }));
+        ws.send(JSON.stringify({ type: 'queued', id: id, botId: data.botId || null }));
         return { ok: true, id };
     }
 
@@ -608,6 +641,11 @@ wss.on('connection', (ws, req) => {
             if (data.type === 'join') {
                 const url = new URL(req.url, `http://${req.headers.host}`);
                 const arenaId = url.searchParams.get('arenaId');
+                const botMeta = data.botId && botRegistry[data.botId] ? botRegistry[data.botId] : null;
+                if (botMeta) {
+                    data.name = botMeta.name;
+                    data.botType = botMeta.botType;
+                }
 
                 if (arenaId && rooms.has(arenaId)) {
                     room = rooms.get(arenaId);
@@ -732,8 +770,6 @@ app.post('/api/arena/join', (req, res) => {
 
     if ((arenaType || 'performance') === 'performance' && bot.botType === 'agent') {
         if (bot.credits <= 0) return res.status(402).json({ error: 'topup_required' });
-        bot.credits -= 1;
-        saveBotRegistry();
     }
 
     const room = assignRoomForJoin({ name: bot.name, botType: bot.botType, arenaType: arenaType || 'performance' });
