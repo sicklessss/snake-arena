@@ -198,6 +198,15 @@ class GameRoom {
         return { body, direction: spawn.dir };
     }
 
+    isCellOccupied(x, y) {
+        for (const p of Object.values(this.players)) {
+            for (const seg of p.body || []) {
+                if (seg.x === x && seg.y === y) return true;
+            }
+        }
+        return false;
+    }
+
     tick() {
         if (this.victoryPauseTimer > 0) {
             this.victoryPauseTimer--;
@@ -211,10 +220,20 @@ class GameRoom {
         this.turn++;
 
         while (this.food.length < MAX_FOOD) {
-            this.food.push({
-                x: Math.floor(Math.random() * CONFIG.gridSize),
-                y: Math.floor(Math.random() * CONFIG.gridSize),
-            });
+            let tries = 0;
+            let fx, fy;
+            do {
+                fx = Math.floor(Math.random() * CONFIG.gridSize);
+                fy = Math.floor(Math.random() * CONFIG.gridSize);
+                tries++;
+                if (tries > 200) break;
+            } while (this.isCellOccupied(fx, fy) || this.food.some(f => f.x === fx && f.y === fy));
+
+            if (tries <= 200) {
+                this.food.push({ x: fx, y: fy });
+            } else {
+                break;
+            }
         }
 
         Object.values(this.players).forEach((p) => {

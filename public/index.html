@@ -554,6 +554,11 @@
                 ctx.stroke();
             }
 
+            if (state.gameState === 'GAMEOVER') {
+                ctx.fillStyle = 'rgba(0,0,0,0.35)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+            }
+
             ctx.fillStyle = '#ff0055';
             ctx.shadowColor = '#ff0055';
             ctx.shadowBlur = 10;
@@ -624,10 +629,12 @@
             });
 
             const allPlayers = [].concat(state.players).sort((a, b) => b.body.length - a.body.length);
-            fightersList.innerHTML = allPlayers.map(p =>
-                '<li class="fighter-item ' + (p.alive ? 'alive' : 'dead') + '">' +
-                '<span class="fighter-name" style="color:' + p.color + '">' + p.name + '</span>' +
-                '<span class="fighter-length">' + p.body.length + ' ' + (p.alive ? '🐍' : '💀') + '</span>' +
+            const waiting = (state.waitingPlayers || []).map(p => ({ ...p, waiting: true }));
+            const merged = allPlayers.concat(waiting);
+            fightersList.innerHTML = merged.map(p =>
+                '<li class="fighter-item ' + (p.waiting ? 'alive' : (p.alive ? 'alive' : 'dead')) + '">' +
+                '<span class="fighter-name" style="color:' + (p.color || '#fff') + '">' + p.name + (p.waiting ? ' (waiting)' : '') + '</span>' +
+                '<span class="fighter-length">' + ((p.body && p.body.length) || 0) + ' ' + (p.waiting ? '⏳' : (p.alive ? '🐍' : '💀')) + '</span>' +
                 '</li>'
             ).join('');
         }

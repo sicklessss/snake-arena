@@ -12,6 +12,7 @@ let positionHistory = [];
 const MAX_HISTORY = 20;
 let loopCounter = 0;
 let forceRandomUntil = 0;
+let escapePositions = [];
 
 const DIRS = [
     { x: 0, y: -1, name: 'up' },
@@ -80,8 +81,20 @@ function handleUpdate(state) {
         loopCounter++;
         if (loopCounter >= 2) {
             // Force random movement for a few ticks
-            forceRandomUntil = Date.now() + 2000; // 2 seconds of randomness
+            forceRandomUntil = Date.now() + 3000; // 3 seconds of randomness
+            escapePositions = positionHistory.slice();
             positionHistory = []; // Reset history
+            loopCounter = 0;
+        }
+    }
+
+    // Detect stuck-in-area: low unique positions over last N ticks
+    if (positionHistory.length === MAX_HISTORY) {
+        const unique = new Set(positionHistory).size;
+        if (unique <= 4) {
+            forceRandomUntil = Date.now() + 3000;
+            escapePositions = positionHistory.slice();
+            positionHistory = [];
             loopCounter = 0;
         }
     }
@@ -107,6 +120,15 @@ function smartStrategy(state, me) {
     
     // If in forced random mode, add randomness to break loops
     const inLoopBreakMode = Date.now() < forceRandomUntil;
+    let escapeCenter = null;
+    if (inLoopBreakMode && escapePositions.length > 0) {
+        let sx = 0, sy = 0;
+        escapePositions.forEach(p => {
+            const [x, y] = p.split(',').map(Number);
+            sx += x; sy += y;
+        });
+        escapeCenter = { x: sx / escapePositions.length, y: sy / escapePositions.length };
+    }
     
     // Build obstacle map
     const obstacles = new Set();
@@ -165,6 +187,10 @@ function smartStrategy(state, me) {
         if (obstacles.has(key)) continue;
         
         let score = 100;
+        if (inLoopBreakMode && escapeCenter) {
+            const dist = Math.abs(nx - escapeCenter.x) + Math.abs(ny - escapeCenter.y);
+            score += dist * 25; // push away from stuck region
+        }
         let killOpportunity = false;
         
         // Check enemy head collision
