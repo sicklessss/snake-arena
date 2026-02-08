@@ -251,7 +251,8 @@
     </div>
 
         <script type="module">
-        import { createConfig, connect, disconnect, getAccount, watchAccount, getBalance, switchChain } from 'https://cdn.jsdelivr.net/npm/wagmi@2.12.4/+esm';
+        import { createConfig } from 'https://cdn.jsdelivr.net/npm/wagmi@2.12.4/+esm';
+        import { connect, disconnect, getAccount, watchAccount, getBalance, switchChain } from 'https://cdn.jsdelivr.net/npm/wagmi@2.12.4/actions/+esm';
         import { injected } from 'https://cdn.jsdelivr.net/npm/wagmi@2.12.4/connectors/+esm';
         import { http, createPublicClient, formatEther } from 'https://cdn.jsdelivr.net/npm/viem@2.21.0/+esm';
         import { baseSepolia } from 'https://cdn.jsdelivr.net/npm/viem@2.21.0/chains/+esm';
