@@ -276,29 +276,7 @@
         </div>
     </div>
 
-        <script type="module">
-        let wagmiConfig = null;
-        let wagmi = null;
-        let viem = null;
-        let chain = null;
-
-        async function initWalletLibs() {
-            try {
-                const wagmiMod = await import('https://cdn.jsdelivr.net/npm/wagmi@2.12.4/+esm');
-                const wagmiActions = await import('https://cdn.jsdelivr.net/npm/wagmi@2.12.4/actions/+esm');
-                const wagmiConnectors = await import('https://cdn.jsdelivr.net/npm/wagmi@2.12.4/connectors/+esm');
-                const viemMod = await import('https://cdn.jsdelivr.net/npm/viem@2.21.0/+esm');
-                const viemChains = await import('https://cdn.jsdelivr.net/npm/viem@2.21.0/chains/+esm');
-
-                wagmi = { ...wagmiMod, ...wagmiActions, ...wagmiConnectors };
-                viem = viemMod;
-                chain = viemChains.baseSepolia;
-
-                wagmiConfig = wagmi.createConfig({
-                    chains: [chain],
-                    connectors: [wagmi.injected()],
-                    transports: { [chain.id]: viem.http() }
-                });
+        <script>                });
                 return true;
             } catch (e) {
                 console.warn('wallet libs load failed', e);
@@ -491,44 +469,26 @@
         }
 
         async function refreshWallet() {
-            if (!wagmiConfig || !wagmi) {
-                walletStatusEl.textContent = '钱包未就绪';
+            if (!window.ethereum) {
+                walletStatusEl.textContent = '未检测到钱包';
                 walletBalanceEl.textContent = '--';
                 walletBtn.textContent = '连接钱包';
                 return;
             }
-            const account = wagmi.getAccount(wagmiConfig);
-            if (!account.isConnected) {
+            const accounts = await window.ethereum.request({ method: 'eth_accounts' });
+            if (!accounts || accounts.length === 0) {
                 walletStatusEl.textContent = '未连接';
                 walletBalanceEl.textContent = '--';
                 walletBtn.textContent = '连接钱包';
                 return;
             }
-            walletStatusEl.textContent = shortAddr(account.address);
-            const bal = await wagmi.getBalance(wagmiConfig, { address: account.address, chainId: chain.id });
-            walletBalanceEl.textContent = viem.formatEther(bal.value).slice(0, 8) + ' ETH';
+            const addr = accounts[0];
+            walletStatusEl.textContent = shortAddr(addr);
+            const bal = await window.ethereum.request({ method: 'eth_getBalance', params: [addr, 'latest'] });
+            const eth = parseInt(bal, 16) / 1e18;
+            walletBalanceEl.textContent = eth.toFixed(4) + ' ETH';
             walletBtn.textContent = '断开钱包';
         }
-
-        (async () => {
-            const ok = await initWalletLibs();
-            if (ok) {
-                wagmi.watchAccount(wagmiConfig, { onChange: refreshWallet });
-                refreshWallet();
-            }
-        })();
-
-        if (walletBtn) walletBtn.onclick = async () => {
-            if (!wagmiConfig || !wagmi) return alert('钱包库加载失败，请刷新页面');
-            const account = wagmi.getAccount(wagmiConfig);
-            if (!account.isConnected) {
-                await wagmi.connect(wagmiConfig, { connector: wagmi.injected() });
-                await wagmi.switchChain(wagmiConfig, { chainId: chain.id });
-            } else {
-                await wagmi.disconnect(wagmiConfig);
-            }
-            refreshWallet();
-        };
 
         async function placeBet(amount) {
             if (!currentMatchId) return alert('暂无比赛');
