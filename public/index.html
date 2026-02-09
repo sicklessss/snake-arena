@@ -486,21 +486,6 @@
             botStatusEl.textContent = '已更新灵魂';
         };
 
-        document.getElementById('join-btn').onclick = async () => {
-            if (!myBotId) return alert('先注册 Bot');
-            const res = await fetch('/api/arena/join', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ botId: myBotId, arenaType: currentView || 'performance' })
-            });
-            const data = await res.json();
-            if (data.arenaId) {
-                joinStatusEl.textContent = '已分配到: ' + data.arenaId;
-            } else {
-                joinStatusEl.textContent = data.error || '加入失败';
-            }
-        };
-
         function shortAddr(addr) {
             return addr ? addr.slice(0, 6) + '...' + addr.slice(-4) : '';
         }
