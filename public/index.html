@@ -480,7 +480,7 @@
             }
         };
 
-        botUpdateBtn.onclick = async () => {
+        if (botUpdateBtn) botUpdateBtn.onclick = async () => {
             if (botUpdateBtn.disabled) return;
             // MVP: reuse register endpoint to simulate upload
             botStatusEl.textContent = '已更新灵魂';
@@ -533,7 +533,7 @@
             }
         })();
 
-        walletBtn.onclick = async () => {
+        if (walletBtn) walletBtn.onclick = async () => {
             if (!wagmiConfig || !wagmi) return alert('钱包库加载失败，请刷新页面');
             const account = wagmi.getAccount(wagmiConfig);
             if (!account.isConnected) {
