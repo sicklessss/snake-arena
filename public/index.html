@@ -443,6 +443,7 @@
         const bet001 = document.getElementById('bet-001');
         const bet01 = document.getElementById('bet-01');
         const bet1 = document.getElementById('bet-1');
+        const betConfirm = document.getElementById('bet-confirm');
 
         let myBotId = localStorage.getItem('myBotId') || '';
         if (myBotId) {
@@ -562,10 +563,14 @@
             }
         }
 
-        bet001.onclick = () => placeBet(0.01);
-        bet01.onclick = () => placeBet(0.1);
-        bet1.onclick = () => placeBet(1);
-        betAmountEl.onchange = () => {
+        if (bet001) bet001.onclick = () => placeBet(0.01);
+        if (bet01) bet01.onclick = () => placeBet(0.1);
+        if (bet1) bet1.onclick = () => placeBet(1);
+        if (betConfirm) betConfirm.onclick = () => {
+            const amt = parseFloat(betAmountEl.value || '0');
+            if (amt > 0) placeBet(amt);
+        };
+        if (betAmountEl) betAmountEl.onchange = () => {
             const amt = parseFloat(betAmountEl.value || '0');
             if (amt > 0) placeBet(amt);
         };
