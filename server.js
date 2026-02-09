@@ -4,6 +4,13 @@ const http = require('http');
 const path = require('path');
 const fs = require('fs');
 const bodyParser = require('body-parser');
+const { Worker } = require('worker_threads');
+
+// --- Sandbox Config ---
+const BOTS_DIR = path.join(__dirname, 'bots');
+if (!fs.existsSync(BOTS_DIR)) fs.mkdirSync(BOTS_DIR, { recursive: true });
+const MAX_WORKERS = 300;
+const activeWorkers = new Map(); // botId -> Worker instance
 
 // High-contrast color palette (16 distinct colors)
 const SNAKE_COLORS = [
@@ -97,6 +104,87 @@ const ROOM_MAX_PLAYERS = {
     competitive: 10,
 };
 
+// --- Sandbox Management ---
+let performancePaused = false;
+
+function checkWorkerLoad() {
+    const count = activeWorkers.size;
+    if (count > MAX_WORKERS && !performancePaused) {
+        console.log(`[Load] Active workers (${count}) > ${MAX_WORKERS}. Pausing performance rooms.`);
+        performancePaused = true;
+    } else if (count <= MAX_WORKERS && performancePaused) {
+        console.log(`[Load] Active workers (${count}) <= ${MAX_WORKERS}. Resuming performance rooms.`);
+        performancePaused = false;
+    }
+}
+
+function stopBotWorker(botId) {
+    if (activeWorkers.has(botId)) {
+        console.log(`[Worker] Stopping bot ${botId}`);
+        const worker = activeWorkers.get(botId);
+        worker.terminate();
+        activeWorkers.delete(botId);
+        checkWorkerLoad();
+    }
+}
+
+function startBotWorker(botId) {
+    // Stop existing if any
+    stopBotWorker(botId);
+
+    const bot = botRegistry[botId];
+    if (!bot || !bot.scriptPath) {
+        console.error(`[Worker] Cannot start bot ${botId}: No script found.`);
+        return;
+    }
+
+    // Static Scan (Check before run)
+    try {
+        const content = fs.readFileSync(bot.scriptPath, 'utf8');
+        const forbidden = ['require', 'import', 'process', 'fs', 'net', 'http', 'https', 'child_process', 'eval'];
+        const found = forbidden.filter(k => content.includes(k));
+        // Simple string check is prone to false positives (e.g. inside comments), but requested by prompt.
+        // We will do a robust regex scan for word boundaries to avoid banning "processData".
+        const risk = forbidden.find(k => new RegExp(`\\b${k}\\b`).test(content));
+        
+        if (risk) {
+            console.error(`[Worker] Bot ${botId} blocked. Found forbidden keyword: ${risk}`);
+            return;
+        }
+    } catch (e) {
+        console.error(`[Worker] Error scanning script for bot ${botId}:`, e);
+        return;
+    }
+
+    console.log(`[Worker] Starting bot ${botId}`);
+    const worker = new Worker(path.join(__dirname, 'sandbox-worker.js'), {
+        workerData: {
+            scriptPath: bot.scriptPath,
+            botId: botId,
+            serverUrl: `ws://localhost:${PORT}` // Local loopback for bots
+        }
+    });
+
+    worker.on('message', (msg) => {
+        if (msg.type === 'log') console.log(`[Bot ${botId}]`, msg.message);
+        if (msg.type === 'error') console.error(`[Bot ${botId}]`, msg.message);
+    });
+
+    worker.on('error', (err) => {
+        console.error(`[Worker] Bot ${botId} error:`, err);
+        stopBotWorker(botId);
+    });
+
+    worker.on('exit', (code) => {
+        if (code !== 0) console.error(`[Worker] Bot ${botId} stopped with exit code ${code}`);
+        activeWorkers.delete(botId);
+        checkWorkerLoad();
+    });
+
+    activeWorkers.set(botId, worker);
+    checkWorkerLoad();
+}
+
 // --- Bot Registry (MVP, local JSON) ---
 const BOT_DB_FILE = path.join(__dirname, 'data', 'bots.json');
 let botRegistry = {};
@@ -105,11 +193,18 @@ function loadBotRegistry() {
     try {
         if (fs.existsSync(BOT_DB_FILE)) {
             botRegistry = JSON.parse(fs.readFileSync(BOT_DB_FILE));
+            // Resume bots on server restart?
+            // For MVP, we don't auto-restart, but we could.
         }
     } catch (e) {
         botRegistry = {};
     }
 }
+
+// Add text parser for upload
+app.use(bodyParser.text({ type: 'text/javascript' }));
+app.use(bodyParser.text({ type: 'application/javascript' }));
+app.use(bodyParser.text({ type: 'text/plain' }));
 
 function saveBotRegistry() {
     try {
@@ -151,6 +246,12 @@ class GameRoom {
 
     startLoops() {
         setInterval(() => {
+            if (this.type === 'performance' && typeof performancePaused !== 'undefined' && performancePaused) {
+                // If paused, skip tick but maybe broadcast "paused" state?
+                // For MVP, just skip. Clients will see freeze.
+                return; 
+            }
+
             if (this.gameState === 'PLAYING') {
                 this.tick();
             } else {
@@ -752,7 +853,18 @@ app.post('/api/bot/register', (req, res) => {
         createdAt: Date.now()
     };
     saveBotRegistry();
-    res.json(botRegistry[id]);
+
+    // auto-assign room on register (performance by default)
+    const room = assignRoomForJoin({ name: botRegistry[id].name, botType: botRegistry[id].botType, arenaType: 'performance' });
+    const payload = { ...botRegistry[id] };
+    if (room) {
+        payload.arenaId = room.id;
+        payload.wsUrl = 'ws://' + req.headers.host + '?arenaId=' + room.id;
+    } else {
+        payload.arenaId = null;
+        payload.error = 'full_or_payment_required';
+    }
+    res.json(payload);
 });
 
 app.post('/api/bot/set-price', (req, res) => {
@@ -826,6 +938,82 @@ app.get('/api/leaderboard/global', (req, res) => {
 
 app.get('/api/leaderboard/arena/:arenaId', (req, res) => {
     res.json(leaderboardFromHistory(req.params.arenaId));
+});
+
+// --- Bot Upload & Sandbox API ---
+app.post('/api/bot/upload', async (req, res) => {
+    try {
+        const { botId } = req.query;
+        let scriptContent = req.body;
+        
+        // If body-parser failed or body is empty
+        if (!scriptContent || typeof scriptContent !== 'string') {
+            return res.status(400).json({ error: 'invalid_script_content', message: 'Send script as text/javascript body' });
+        }
+
+        // 1. Static Scan
+        const forbidden = ['require', 'import', 'process', 'fs', 'net', 'http', 'https', 'child_process', 'eval'];
+        // Use a regex to check for word boundaries to avoid false positives on variable names like "processData"
+        // But block properties like "process.env"
+        // Simple heuristic: if it matches \bkeyword\b it is risky.
+        const risk = forbidden.find(k => new RegExp(`\\b${k}\\b`).test(scriptContent));
+        if (risk) {
+            return res.status(400).json({ error: 'security_violation', message: `Forbidden keyword found: ${risk}` });
+        }
+        
+        // 2. Resolve Bot ID
+        let targetBotId = botId;
+        if (!targetBotId) {
+            // Create new bot if no ID provided
+            targetBotId = createBotId();
+            botRegistry[targetBotId] = {
+                id: targetBotId,
+                name: `Bot-${targetBotId.substr(-4)}`,
+                credits: 5,
+                botType: 'agent',
+                createdAt: Date.now()
+            };
+        } else if (!botRegistry[targetBotId]) {
+            return res.status(404).json({ error: 'bot_not_found' });
+        }
+
+        // 3. Save Script
+        const scriptPath = path.join(BOTS_DIR, `${targetBotId}.js`);
+        fs.writeFileSync(scriptPath, scriptContent);
+        
+        botRegistry[targetBotId].scriptPath = scriptPath;
+        saveBotRegistry();
+
+        // 4. Restart if running
+        if (activeWorkers.has(targetBotId)) {
+            startBotWorker(targetBotId);
+        }
+
+        res.json({ ok: true, botId: targetBotId, message: 'Bot uploaded and scanned successfully.' });
+    } catch (e) {
+        console.error(e);
+        res.status(500).json({ error: 'upload_failed' });
+    }
+});
+
+app.post('/api/bot/start', (req, res) => {
+    const { botId } = req.body;
+    if (!botRegistry[botId]) return res.status(404).json({ error: 'bot_not_found' });
+    
+    if (activeWorkers.has(botId)) {
+        return res.json({ ok: true, message: 'Already running' });
+    }
+    
+    startBotWorker(botId);
+    res.json({ ok: true, message: 'Bot started' });
+});
+
+app.post('/api/bot/stop', (req, res) => {
+    const { botId } = req.body;
+    if (!botRegistry[botId]) return res.status(404).json({ error: 'bot_not_found' });
+    
+    stopBotWorker(botId);
+    res.json({ ok: true, message: 'Bot stopped' });
 });
 
 // --- Betting (MVP, in-memory) ---

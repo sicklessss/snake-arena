@@ -461,14 +461,61 @@
             return addr ? addr.slice(0, 6) + '...' + addr.slice(-4) : '';
         }
 
+        let selectedProvider = null;
+
+        function getProviders() {
+            const eth = window.ethereum;
+            if (!eth) return [];
+            return eth.providers && Array.isArray(eth.providers) ? eth.providers : [eth];
+        }
+
+        function bindProviderEvents(provider) {
+            if (!provider || !provider.on || provider.__snakeBound) return;
+            provider.on('accountsChanged', refreshWallet);
+            provider.on('chainChanged', refreshWallet);
+            provider.__snakeBound = true;
+        }
+
+        function pickProvider() {
+            if (selectedProvider) return selectedProvider;
+            const providers = getProviders();
+            if (!providers.length) return null;
+
+            const priority = [
+                p => p.isOkxWallet,
+                p => p.isMetaMask,
+                p => p.isCoinbaseWallet,
+                p => p.isRabby,
+                p => p.isBitKeep,
+                p => p.isTokenPocket,
+                p => p.isTrust,
+                p => p.isBraveWallet,
+                p => p.isPhantom,
+                p => p.isMathWallet,
+            ];
+
+            for (const match of priority) {
+                const found = providers.find(match);
+                if (found) {
+                    selectedProvider = found;
+                    bindProviderEvents(found);
+                    return found;
+                }
+            }
+            selectedProvider = providers[0];
+            bindProviderEvents(selectedProvider);
+            return selectedProvider;
+        }
+
         async function refreshWallet() {
-            if (!window.ethereum) {
+            const provider = pickProvider();
+            if (!provider) {
                 walletStatusEl.textContent = '未检测到钱包';
                 walletBalanceEl.textContent = '--';
                 walletBtn.textContent = '连接钱包';
                 return;
             }
-            const accounts = await window.ethereum.request({ method: 'eth_accounts' });
+            const accounts = await provider.request({ method: 'eth_accounts' });
             if (!accounts || accounts.length === 0) {
                 walletStatusEl.textContent = '未连接';
                 walletBalanceEl.textContent = '--';
@@ -477,11 +524,25 @@
             }
             const addr = accounts[0];
             walletStatusEl.textContent = shortAddr(addr);
-            const bal = await window.ethereum.request({ method: 'eth_getBalance', params: [addr, 'latest'] });
+            const bal = await provider.request({ method: 'eth_getBalance', params: [addr, 'latest'] });
             const eth = parseInt(bal, 16) / 1e18;
             walletBalanceEl.textContent = eth.toFixed(4) + ' ETH';
-            walletBtn.textContent = '断开钱包';
+            walletBtn.textContent = '重新连接';
         }
+
+        async function connectWallet() {
+            const provider = pickProvider();
+            if (!provider) return alert('未检测到钱包');
+            try {
+                await provider.request({ method: 'eth_requestAccounts' });
+            } catch (e) {
+                return alert('连接失败: ' + (e.message || e));
+            }
+            refreshWallet();
+        }
+
+        if (walletBtn) walletBtn.onclick = connectWallet;
+        refreshWallet();
 
         async function placeBet(amount) {
             if (!currentMatchId) return alert('暂无比赛');
