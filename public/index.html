@@ -2,192 +2,39 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>SNAKE ARENA v2</title>
+    <title>SNAKE ARENA v3</title>
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
     <style>
-        :root {
-            --bg-color: #050510;
-            --panel: #0a0a1a;
-            --neon-green: #00ff88;
-            --neon-pink: #ff0055;
-            --neon-blue: #00ccff;
-            --text-dim: #8a8aa8;
-        }
+        :root { --bg-color: #050510; --panel: #0a0a1a; --neon-green: #00ff88; --neon-pink: #ff0055; --neon-blue: #00ccff; --text-dim: #8a8aa8; }
         * { box-sizing: border-box; }
-        body {
-            background-color: var(--bg-color);
-            color: #fff;
-            font-family: 'Orbitron', sans-serif;
-            margin: 0;
-            height: 100vh;
-            overflow: hidden;
-        }
-        .app {
-            height: 100vh;
-            display: flex;
-            flex-direction: column;
-        }
-        .top-tabs {
-            display: flex;
-            gap: 12px;
-            padding: 12px 16px;
-            border-bottom: 1px solid #1b1b2b;
-            background: #070714;
-        }
-        .tab {
-            background: transparent;
-            color: #bbb;
-            border: 1px solid #2a2a3a;
-            padding: 8px 14px;
-            border-radius: 8px;
-            cursor: pointer;
-            font-weight: 700;
-        }
-        .tab.active {
-            color: #000;
-            background: var(--neon-green);
-            border-color: var(--neon-green);
-        }
-        .content {
-            display: flex;
-            flex: 1;
-            min-height: 0;
-        }
-        .left-panel, .right-panel {
-            width: 320px;
-            background: var(--panel);
-            padding: 16px;
-            overflow-y: auto;
-            border-right: 1px solid #1b1b2b;
-        }
-        .right-panel {
-            border-right: none;
-            border-left: 1px solid #1b1b2b;
-        }
-        .panel-section {
-            margin-bottom: 18px;
-        }
-        .panel-section h3 {
-            margin: 0 0 8px 0;
-            border-bottom: 2px solid var(--neon-pink);
-            padding-bottom: 6px;
-        }
-        .panel-card {
-            background: rgba(255,255,255,0.05);
-            padding: 10px;
-            border-radius: 8px;
-            border: 1px solid #202038;
-        }
-        .panel-card input, .panel-card button {
-            width: 100%;
-            margin-top: 6px;
-            padding: 8px;
-            border-radius: 6px;
-            border: 1px solid #2a2a3a;
-            background: #0b0b16;
-            color: #fff;
-            font-family: 'Orbitron', sans-serif;
-        }
-        .panel-card button {
-            cursor: pointer;
-            background: var(--neon-blue);
-            color: #000;
-            font-weight: 700;
-        }
-        .panel-row {
-            display: flex;
-            justify-content: space-between;
-            font-size: 0.9rem;
-            color: var(--text-dim);
-        }
+        body { background-color: var(--bg-color); color: #fff; font-family: 'Orbitron', sans-serif; margin: 0; height: 100vh; overflow: hidden; }
+        .app { height: 100vh; display: flex; flex-direction: column; }
+        .top-tabs { display: flex; gap: 12px; padding: 12px 16px; border-bottom: 1px solid #1b1b2b; background: #070714; }
+        .tab { background: transparent; color: #bbb; border: 1px solid #2a2a3a; padding: 8px 14px; border-radius: 8px; cursor: pointer; font-weight: 700; }
+        .tab.active { color: #000; background: var(--neon-green); border-color: var(--neon-green); }
+        .content { display: flex; flex: 1; min-height: 0; }
+        .left-panel, .right-panel { width: 320px; background: var(--panel); padding: 16px; overflow-y: auto; border-right: 1px solid #1b1b2b; }
+        .right-panel { border-right: none; border-left: 1px solid #1b1b2b; }
+        .panel-section { margin-bottom: 18px; }
+        .panel-section h3 { margin: 0 0 8px 0; border-bottom: 2px solid var(--neon-pink); padding-bottom: 6px; }
+        .panel-card { background: rgba(255,255,255,0.05); padding: 10px; border-radius: 8px; border: 1px solid #202038; }
+        .panel-card input, .panel-card button { width: 100%; margin-top: 6px; padding: 8px; border-radius: 6px; border: 1px solid #2a2a3a; background: #0b0b16; color: #fff; font-family: 'Orbitron', sans-serif; }
+        .panel-card button { cursor: pointer; background: var(--neon-blue); color: #000; font-weight: 700; }
+        .panel-row { display: flex; justify-content: space-between; font-size: 0.9rem; color: var(--text-dim); }
         .panel-row span { color: #fff; }
-
-        .main-stage {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            position: relative;
-            gap: 6px;
-            overflow: hidden;
-        }
-        @media (max-width: 720px) {
-            .main-stage {
-                justify-content: flex-start;
-                padding-top: 10px;
-            }
-        }
-        .main-stage.leaderboard-only {
-            justify-content: flex-start;
-            overflow-y: auto;
-            padding: 20px 0;
-        }
-        #leaderboard-page {
-            overflow-y: auto;
-        }
-        .btn-disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-            background: #444 !important;
-            color: #bbb !important;
-        }
-        h1 {
-            color: var(--neon-green);
-            text-shadow: 0 0 10px rgba(0,255,136,0.5);
-            margin: 4px 0 0 0;
-        }
-        .match-info {
-            color: var(--neon-blue);
-            font-size: 1.2rem;
-        }
-        .timer {
-            color: #ff8800;
-            font-size: 2rem;
-            font-weight: bold;
-            text-shadow: 0 0 15px rgba(255,136,0,0.7);
-        }
-        canvas {
-            border: 4px solid var(--neon-blue);
-            box-shadow: 0 0 30px rgba(0, 204, 255, 0.2);
-            background-color: #000;
-            max-width: 90%;
-            max-height: 70vh;
-        }
-        .status-bar {
-            margin-top: 6px;
-            font-size: 0.95rem;
-            color: #888;
-        }
+        .main-stage { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; gap: 6px; overflow: hidden; }
+        .btn-disabled { opacity: 0.5; cursor: not-allowed; background: #444 !important; color: #bbb !important; }
+        h1 { color: var(--neon-green); text-shadow: 0 0 10px rgba(0,255,136,0.5); margin: 4px 0 0 0; }
+        .match-info { color: var(--neon-blue); font-size: 1.2rem; }
+        .timer { color: #ff8800; font-size: 2rem; font-weight: bold; text-shadow: 0 0 15px rgba(255,136,0,0.7); }
+        canvas { border: 4px solid var(--neon-blue); box-shadow: 0 0 30px rgba(0, 204, 255, 0.2); background-color: #000; max-width: 90%; max-height: 70vh; }
+        .status-bar { margin-top: 6px; font-size: 0.95rem; color: #888; }
         .status-bar span { color: white; }
-        #overlay {
-            position: absolute;
-            top: 45%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            text-align: center;
-            z-index: 10;
-            pointer-events: none;
-        }
-        .overlay-text {
-            font-size: 2.6rem;
-            color: var(--neon-green);
-            text-shadow: 0 0 30px rgba(0,255,136,0.8);
-        }
-        .overlay-text.glow {
-            text-shadow: 0 0 20px rgba(0,255,136,0.8), 0 0 40px rgba(0,255,136,0.6);
-        }
-
+        #overlay { position: absolute; top: 45%; left: 50%; transform: translate(-50%, -50%); text-align: center; z-index: 10; pointer-events: none; }
+        .overlay-text { font-size: 2.6rem; color: var(--neon-green); text-shadow: 0 0 30px rgba(0,255,136,0.8); }
+        .overlay-text.glow { text-shadow: 0 0 20px rgba(0,255,136,0.8), 0 0 40px rgba(0,255,136,0.6); }
         .fighter-list { list-style: none; padding: 0; margin: 0; }
-        .fighter-item {
-            background: rgba(255,255,255,0.05);
-            margin-bottom: 6px;
-            padding: 8px;
-            border-left: 4px solid #555;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
+        .fighter-item { background: rgba(255,255,255,0.05); margin-bottom: 6px; padding: 8px; border-left: 4px solid #555; display: flex; justify-content: space-between; align-items: center; }
         .fighter-item.alive { border-left-color: var(--neon-green); }
         .fighter-item.dead { border-left-color: #ff3333; opacity: 0.6; }
         .fighter-name { font-weight: bold; }
@@ -211,6 +58,11 @@
                         <div class="panel-row"><span>状态</span><span id="wallet-status">未连接</span></div>
                         <div class="panel-row"><span>余额</span><span id="wallet-balance">--</span></div>
                         <button id="wallet-connect">连接钱包</button>
+                        <!-- Hidden select for multi-wallet -->
+                        <div id="wallet-selector-container" style="display:none; margin-top:8px;">
+                            <select id="wallet-select" style="width:100%; background:#222; color:#fff; padding:5px; border:1px solid #444;"></select>
+                            <button id="wallet-confirm-select" style="margin-top:4px;">确定</button>
+                        </div>
                     </div>
                 </div>
 
@@ -233,9 +85,9 @@
                         <div class="panel-row"><span>当前比赛</span><span id="bet-total">--</span></div>
                         <input id="bet-bot" placeholder="预测 Bot 名称" />
                         <div style="display:flex; gap:6px; margin-top:6px;">
+                            <button id="bet-0001">0.001E</button>
                             <button id="bet-001">0.01E</button>
                             <button id="bet-01">0.1E</button>
-                            <button id="bet-1">1E</button>
                             <input id="bet-amount" placeholder="自定义" style="width:80px;" />
                         </div>
                         <button id="bet-confirm">预测</button>
@@ -251,323 +103,220 @@
                 <canvas id="arena" width="600" height="600"></canvas>
                 <div class="status-bar" id="status">Connecting...</div>
                 <div id="overlay"></div>
-
                 <div id="leaderboard-page" style="display:none; width:90%; max-width:900px; margin-top:20px;">
-                    <h2 style="color:#fff; border-bottom:2px solid var(--neon-blue); padding-bottom:8px;">总排行榜 (Top 20)</h2>
-                    <div class="panel-card" style="margin-top:10px;">
-                        <input id="match-search" placeholder="输入比赛序号" />
-                        <button id="match-search-btn">搜索比赛</button>
-                        <div class="muted" id="match-search-result">--</div>
-                    </div>
                     <ul class="fighter-list" id="leaderboard-global" style="margin-top:12px;"></ul>
                 </div>
             </main>
 
             <aside class="right-panel" id="right-panel">
-                <div class="panel-section">
-                    <h3>⚔️ 当前选手</h3>
-                    <ul class="fighter-list" id="fighters"></ul>
-                </div>
-                <div class="panel-section">
-                    <h3>🏆 Leaderboard (Top 10)</h3>
-                    <ul class="fighter-list" id="leaderboard"></ul>
-                </div>
+                <div class="panel-section"><h3>⚔️ 当前选手</h3><ul class="fighter-list" id="fighters"></ul></div>
+                <div class="panel-section"><h3>🏆 Leaderboard (Top 10)</h3><ul class="fighter-list" id="leaderboard"></ul></div>
             </aside>
         </div>
     </div>
 
-        <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.1/ethers.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.1/ethers.umd.min.js"></script>
     <script>
+        // --- CONSTANTS ---
         const CONTRACT_ADDRESS = "0xAf077e41644529AF966EBC9B49849c94cDf80EE2";
         const BASE_SEPOLIA_ID = "0x14a34"; // 84532
-        const CONTRACT_ABI = [
-            "function placeBet(uint256 matchId, string memory botId) external payable"
-        ];
+        const CONTRACT_ABI = ["function placeBet(uint256 matchId, string memory botId) external payable"];
 
-        const canvas = document.getElementById('arena');
-        const ctx = canvas.getContext('2d');
-        const matchInfo = document.getElementById('match-info');
-        const timerDisplay = document.getElementById('timer');
-        const status = document.getElementById('status');
-        const overlay = document.getElementById('overlay');
-        const fightersList = document.getElementById('fighters');
-        const leaderboardList = document.getElementById('leaderboard');
-        const leaderboardPage = document.getElementById('leaderboard-page');
-        const leaderboardGlobal = document.getElementById('leaderboard-global');
-        const matchSearchEl = document.getElementById('match-search');
-        const matchSearchBtn = document.getElementById('match-search-btn');
-        const matchSearchResult = document.getElementById('match-search-result');
-        const leftPanel = document.getElementById('left-panel');
-        const rightPanel = document.getElementById('right-panel');
-        const mainStage = document.getElementById('main-stage');
+        // --- STATE ---
+        let WalletState = {
+            provider: null,
+            account: null,
+            isConnected: false
+        };
+        let GameState = {
+            matchId: null,
+            arenaId: 'performance-1',
+            view: 'performance',
+            myBotId: localStorage.getItem('myBotId') || ''
+        };
 
-        let gridSize = 30;
-        const cellSize = canvas.width / gridSize;
-        let ws = null;
-        let currentArenaId = 'performance-1';
-        let currentView = 'performance';
-        let currentMatchId = null;
+        // --- DOM Elements ---
+        const els = {
+            walletStatus: document.getElementById('wallet-status'),
+            walletBalance: document.getElementById('wallet-balance'),
+            walletBtn: document.getElementById('wallet-connect'),
+            walletSelector: document.getElementById('wallet-selector-container'),
+            walletSelect: document.getElementById('wallet-select'),
+            walletConfirm: document.getElementById('wallet-confirm-select'),
+            
+            botId: document.getElementById('my-bot-id'),
+            botName: document.getElementById('bot-name'),
+            botStatus: document.getElementById('bot-status'),
+            botRegister: document.getElementById('bot-register'),
+            botUpdate: document.getElementById('bot-update'),
+            
+            betTotal: document.getElementById('bet-total'),
+            betBot: document.getElementById('bet-bot'),
+            betAmount: document.getElementById('bet-amount'),
+            betStatus: document.getElementById('bet-status'),
+            betBtns: [
+                { el: document.getElementById('bet-0001'), val: 0.001 },
+                { el: document.getElementById('bet-001'), val: 0.01 },
+                { el: document.getElementById('bet-01'), val: 0.1 }
+            ],
+            betConfirm: document.getElementById('bet-confirm'),
+            
+            canvas: document.getElementById('arena'),
+            timer: document.getElementById('timer'),
+            status: document.getElementById('status'),
+            overlay: document.getElementById('overlay'),
+            matchInfo: document.getElementById('match-info'),
+            fighters: document.getElementById('fighters'),
+            leaderboard: document.getElementById('leaderboard')
+        };
 
-        function connectWS(arenaId) {
-            if (ws) ws.close();
-            const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
-            ws = new WebSocket(wsProto + '://' + location.host + '?arenaId=' + arenaId);
-            ws.onopen = () => { status.textContent = 'Connected!'; };
-            ws.onclose = () => { status.textContent = 'Disconnected...'; };
-            ws.onmessage = (e) => {
-                const msg = JSON.parse(e.data);
-                if (msg.type === 'update') {
-                    render(msg.state);
+        // --- WALLET LOGIC (REWRITTEN) ---
+
+        function getEthereumProviders() {
+            const providers = [];
+            
+            // 1. Standard Injection
+            if (window.ethereum) {
+                if (window.ethereum.providers && Array.isArray(window.ethereum.providers)) {
+                    providers.push(...window.ethereum.providers);
+                } else {
+                    providers.push(window.ethereum);
                 }
-            };
-        }
-
-        function loadLeaderboard(arenaId = null) {
-            const url = arenaId ? ('/api/leaderboard/arena/' + arenaId) : '/api/leaderboard/global';
-            fetch(url).then(r => r.json()).then(data => {
-                const list = data.slice(0, 10).map(m =>
-                    '<li class="fighter-item"><span class="fighter-name">' + m.name + '</span><span class="fighter-length">' + m.wins + 'W</span></li>'
-                ).join('');
-                leaderboardList.innerHTML = list;
-            }).catch(()=>{});
-        }
-
-        function loadGlobalLeaderboard() {
-            fetch('/api/leaderboard/global').then(r => r.json()).then(data => {
-                leaderboardGlobal.innerHTML = data.slice(0, 20).map(m =>
-                    '<li class="fighter-item"><span class="fighter-name">' + m.name + '</span><span class="fighter-length">' + m.wins + 'W</span></li>'
-                ).join('');
-            }).catch(()=>{});
-        }
-
-        async function searchMatch() {
-            const id = (matchSearchEl.value || '').trim();
-            if (!id) return;
-            const res = await fetch('/history');
-            const data = await res.json();
-            const match = data.find(m => String(m.matchId) === String(id));
-            if (match) {
-                matchSearchResult.textContent = `#${match.matchId} Winner: ${match.winner} Score: ${match.score || 0}`;
-            } else {
-                matchSearchResult.textContent = '未找到该比赛';
             }
+
+            // 2. Explicit Injections (for wallets that don't play nice with EIP-6963 yet)
+            if (window.okxwallet) providers.push(window.okxwallet);
+            if (window.coinbaseWalletExtension) providers.push(window.coinbaseWalletExtension);
+            if (window.trustwallet) providers.push(window.trustwallet);
+            if (window.phantom?.ethereum) providers.push(window.phantom.ethereum);
+            if (window.bitkeep?.ethereum) providers.push(window.bitkeep.ethereum);
+
+            // Deduplicate
+            return [...new Set(providers)];
         }
-
-        matchSearchBtn.onclick = searchMatch;
-
-        function setView(view) {
-            currentView = view;
-            if (view === 'performance') currentArenaId = 'performance-1';
-            if (view === 'competitive') currentArenaId = 'competitive-1';
-            if (view === 'leaderboard') currentArenaId = null;
-
-            const canvasEl = document.querySelector('canvas');
-            const timerEl = document.getElementById('timer');
-            const statusEl = document.getElementById('status');
-            const overlayEl = document.getElementById('overlay');
-
-            if (currentArenaId) {
-                leaderboardPage.style.display = 'none';
-                leftPanel.style.display = '';
-                rightPanel.style.display = '';
-                mainStage.classList.remove('leaderboard-only');
-                canvasEl.style.display = '';
-                timerEl.style.display = '';
-                statusEl.style.display = '';
-                overlayEl.style.display = '';
-                connectWS(currentArenaId);
-                loadLeaderboard(currentArenaId);
-            } else {
-                if (ws) ws.close();
-                            matchInfo.textContent = 'MATCH #' + (state.matchId || '?');
-                leaderboardPage.style.display = 'block';
-                leftPanel.style.display = 'none';
-                rightPanel.style.display = 'none';
-                mainStage.classList.add('leaderboard-only');
-                canvasEl.style.display = 'none';
-                timerEl.style.display = 'none';
-                statusEl.style.display = 'none';
-                overlayEl.style.display = 'none';
-                loadGlobalLeaderboard();
-            }
-        }
-
-        document.querySelectorAll('.tab').forEach(btn => {
-            btn.addEventListener('click', () => {
-                document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
-                btn.classList.add('active');
-                setView(btn.dataset.view);
-            });
-        });
-
-        setView('performance');
-        window.__dbg = { setView, connectWS };
-
-        // --- UI Wiring (MVP) ---
-        const botIdEl = document.getElementById('my-bot-id');
-        const botNameEl = document.getElementById('bot-name');
-        const botPriceEl = document.getElementById('bot-price');
-        const botStatusEl = document.getElementById('bot-status');
-        const botUpdateBtn = document.getElementById('bot-update');
-
-        const walletStatusEl = document.getElementById('wallet-status');
-        const walletBalanceEl = document.getElementById('wallet-balance');
-        const walletBtn = document.getElementById('wallet-connect');
-
-        const betTotalEl = document.getElementById('bet-total');
-        const betBotEl = document.getElementById('bet-bot');
-        const betAmountEl = document.getElementById('bet-amount');
-        const betStatusEl = document.getElementById('bet-status');
-        const bet001 = document.getElementById('bet-001');
-        const bet01 = document.getElementById('bet-01');
-        const bet1 = document.getElementById('bet-1');
-        const betConfirm = document.getElementById('bet-confirm');
-
-        let myBotId = localStorage.getItem('myBotId') || '';
-        if (myBotId) {
-            botIdEl.textContent = myBotId;
-            refreshBot();
-        }
-
-        async function refreshBot() {
-            if (!myBotId) return;
-            const res = await fetch('/api/bot/' + myBotId);
-            if (!res.ok) return;
-            const bot = await res.json();
-            botIdEl.textContent = bot.id;
-            botStatusEl.textContent = '已注册';
-            botUpdateBtn.disabled = false;
-            botUpdateBtn.classList.remove('btn-disabled');
-        }
-
-        document.getElementById('bot-register').onclick = async () => {
-            const name = botNameEl.value || 'AgentBot';
-            const res = await fetch('/api/bot/register', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name, price: 0.01, botType: 'agent' })
-            });
-            const data = await res.json();
-            if (data.id) {
-                myBotId = data.id;
-                localStorage.setItem('myBotId', myBotId);
-                botIdEl.textContent = myBotId;
-                botStatusEl.textContent = '上传成功';
-                botUpdateBtn.disabled = false;
-                botUpdateBtn.classList.remove('btn-disabled');
-            }
-        };
-
-        if (botUpdateBtn) botUpdateBtn.onclick = async () => {
-            if (botUpdateBtn.disabled) return;
-            // MVP: reuse register endpoint to simulate upload
-            botStatusEl.textContent = '已更新灵魂';
-        };
 
         function shortAddr(addr) {
-            return addr ? addr.slice(0, 6) + '...' + addr.slice(-4) : '';
+            return addr ? addr.slice(0, 6) + '...' + addr.slice(-4) : '--';
         }
 
-        let selectedProvider = null;
-
-        function getProviders() {
-            const eth = window.ethereum;
-            if (!eth) return [];
-            return eth.providers && Array.isArray(eth.providers) ? eth.providers : [eth];
+        async function updateUI() {
+            if (WalletState.isConnected && WalletState.account) {
+                els.walletStatus.textContent = shortAddr(WalletState.account);
+                els.walletBtn.textContent = '断开 / 切换';
+                try {
+                    const bal = await WalletState.provider.request({ 
+                        method: 'eth_getBalance', 
+                        params: [WalletState.account, 'latest'] 
+                    });
+                    const eth = parseInt(bal, 16) / 1e18;
+                    els.walletBalance.textContent = eth.toFixed(4) + ' ETH';
+                } catch (e) {
+                    els.walletBalance.textContent = 'Err';
+                }
+            } else {
+                els.walletStatus.textContent = '未连接';
+                els.walletBalance.textContent = '--';
+                els.walletBtn.textContent = '连接钱包';
+            }
         }
 
-        // --- 修复：添加断开连接和 Provider 选择逻辑 ---
-        function disconnectWallet() {
-            selectedProvider = null;
-            walletStatusEl.textContent = '未连接';
-            walletBalanceEl.textContent = '--';
-            walletBtn.textContent = '连接钱包';
-            walletBtn.onclick = connectWallet; // 恢复连接点击事件
+        function resetWallet() {
+            WalletState = { provider: null, account: null, isConnected: false };
+            els.walletSelector.style.display = 'none';
+            updateUI();
         }
 
-        async function connectWallet() {
-            // 如果已经连接，则执行断开逻辑 (Toggle)
-            if (selectedProvider && walletStatusEl.textContent !== '未连接') {
-                if (confirm('断开当前钱包连接？')) {
-                    disconnectWallet();
+        async function handleConnectClick() {
+            // Case 1: Already connected -> Disconnect
+            if (WalletState.isConnected) {
+                if (confirm('是否断开当前钱包？\n(若要切换账号，断开后请在钱包插件中切换账号，再重新连接)')) {
+                    resetWallet();
                 }
                 return;
             }
 
-            const providers = getProviders();
-            if (!providers.length) return alert('未检测到钱包插件 (MetaMask, Coinbase, etc.)');
+            // Case 2: New Connection
+            const providers = getEthereumProviders();
+            if (providers.length === 0) return alert('未检测到钱包插件，请安装 MetaMask 或其他 Web3 钱包。');
 
-            // 简单的选择逻辑：如果只有一个，直接用；如果有多个，尝试优先选择用户上次用的，或者弹窗（这里简化为重新检测）
-            // 为了支持切换，我们在连接时强制重新选择
-            
-            // 重新扫描并尝试连接
-            let providerToUse = null;
-            
-            // 优先级策略：如果有 isMetaMask 且没选过，优先；否则选第一个
-            // 改进：如果有多个，这里应该允许用户选，但 HTML 模态框太重。
-            // 策略：重置 selectedProvider 后，再次调用 requestAccounts 会触发钱包自己的选择弹窗（如果支持）
-            // 或者我们可以轮询一下
-            
+            // Determine names for display
+            const getProviderName = (p) => {
+                if (p.isMetaMask && !p.isBitKeep && !p.isTokenPocket && !p.isOkxWallet) return 'MetaMask';
+                if (p.isOkxWallet) return 'OKX Wallet';
+                if (p.isTrust) return 'Trust Wallet';
+                if (p.isCoinbaseWallet) return 'Coinbase Wallet';
+                if (p.isBitKeep) return 'BitKeep';
+                if (p.isPhantom) return 'Phantom';
+                if (p.isRabby) return 'Rabby';
+                if (p === window.okxwallet) return 'OKX Wallet (Direct)';
+                return 'Wallet';
+            };
+
+            // If multiple providers, force selection
             if (providers.length > 1) {
-                // 如果有多个注入，通常 window.ethereum 是一个混合代理，或者我们需要遍历 providers 找到激发的那个
-                // 简化：优先找 MetaMask 或用户激发的那个
-                providerToUse = providers.find(p => p.isMetaMask) || providers[0];
-            } else {
-                providerToUse = providers[0];
+                els.walletSelector.style.display = 'block';
+                els.walletSelect.innerHTML = providers.map((p, i) => {
+                    const name = getProviderName(p);
+                    // Add index to name if duplicates exist
+                    return `<option value="${i}">${name} ${i>0 ? '' : ''}</option>`;
+                }).join('');
+                // If it's the first time, maybe auto-expand? No, wait for user.
+                return; 
             }
 
-            if (!providerToUse) return alert('无法初始化钱包 Provider');
+            // Single provider
+            await connectToProvider(providers[0]);
+        }
 
+        els.walletConfirm.onclick = async () => {
+            const idx = els.walletSelect.value;
+            const providers = getEthereumProviders();
+            if (providers[idx]) {
+                await connectToProvider(providers[idx]);
+                els.walletSelector.style.display = 'none';
+            }
+        };
+
+        async function connectToProvider(provider) {
             try {
-                const accounts = await providerToUse.request({ method: 'eth_requestAccounts' });
-                if (!accounts || accounts.length === 0) throw new Error('用户拒绝了连接');
-                
-                selectedProvider = providerToUse;
-                bindProviderEvents(selectedProvider);
-                
-                walletStatusEl.textContent = shortAddr(accounts[0]);
-                await updateBalance(accounts[0]);
-                
-                walletBtn.textContent = '断开连接'; // 改变按钮文本
-                walletBtn.onclick = connectWallet; // 保持绑定
-                
+                // Try to request permissions to force a popup if possible (for switching)
+                // But fallback quickly if it fails
+                let accounts;
+                try {
+                    // Try standard request first
+                    accounts = await provider.request({ method: 'eth_requestAccounts' });
+                } catch (e) {
+                    throw e;
+                }
+
+                if (!accounts || accounts.length === 0) throw new Error('No accounts found');
+
+                WalletState.provider = provider;
+                WalletState.account = accounts[0];
+                WalletState.isConnected = true;
+
+                // Bind events
+                provider.on('accountsChanged', (accs) => {
+                    if (accs.length === 0) resetWallet();
+                    else {
+                        WalletState.account = accs[0];
+                        updateUI();
+                    }
+                });
+                provider.on('chainChanged', () => window.location.reload());
+
+                updateUI();
+
             } catch (e) {
                 console.error(e);
-                alert('连接失败: ' + (e.message || e));
-                disconnectWallet();
+                alert('连接失败: ' + (e.message || e.code));
+                resetWallet();
             }
         }
 
-        async function updateBalance(addr) {
-            if (!selectedProvider || !addr) return;
-            try {
-                const bal = await selectedProvider.request({ method: 'eth_getBalance', params: [addr, 'latest'] });
-                const eth = parseInt(bal, 16) / 1e18;
-                walletBalanceEl.textContent = eth.toFixed(4) + ' ETH';
-            } catch (e) {
-                console.error('Balance error:', e);
-                walletBalanceEl.textContent = 'Err';
-            }
-        }
+        els.walletBtn.onclick = handleConnectClick;
 
-        function bindProviderEvents(provider) {
-            if (!provider || !provider.on || provider.__snakeBound) return;
-            provider.on('accountsChanged', (accounts) => {
-                if (accounts.length === 0) {
-                    disconnectWallet();
-                } else {
-                    walletStatusEl.textContent = shortAddr(accounts[0]);
-                    updateBalance(accounts[0]);
-                }
-            });
-            provider.on('chainChanged', () => window.location.reload()); // 链改变通常需要刷新以重置状态
-            provider.__snakeBound = true;
-        }
-
-        // 初始化检查 (不自动连接，避免死锁，或者静默检查)
-        // 移除自动 pickProvider 调用，等待用户点击
-        if (walletBtn) walletBtn.onclick = connectWallet;
-
+        // --- BETTING LOGIC ---
 
         async function switchToBaseSepolia(provider) {
             try {
@@ -576,9 +325,8 @@
                     params: [{ chainId: BASE_SEPOLIA_ID }],
                 });
                 return true;
-            } catch (switchError) {
-                // This error code indicates that the chain has not been added to MetaMask.
-                if (switchError.code === 4902) {
+            } catch (err) {
+                if (err.code === 4902) {
                     try {
                         await provider.request({
                             method: 'wallet_addEthereumChain',
@@ -586,240 +334,236 @@
                                 chainId: BASE_SEPOLIA_ID,
                                 chainName: 'Base Sepolia',
                                 rpcUrls: ['https://sepolia.base.org'],
-                                blockExplorerUrls: ['https://sepolia.basescan.org']
+                                blockExplorerUrls: ['https://sepolia.basescan.org'],
+                                nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 }
                             }],
                         });
                         return true;
-                    } catch (addError) {
-                        alert('无法添加 Base Sepolia 网络');
+                    } catch (addErr) {
+                        console.error(addErr);
                         return false;
                     }
                 }
-                alert('请切换到 Base Sepolia 网络');
                 return false;
             }
         }
 
         async function placeBet(amount) {
-            if (!currentMatchId) return alert('暂无比赛');
-            const botName = betBotEl.value || '';
-            if (!botName || !amount) return alert('请填写 Bot 名称和下注金额');
-
-            if (!selectedProvider) {
-                alert('请先连接钱包');
-                return connectWallet();
-            }
-
-            // Check network
-            const chainId = await selectedProvider.request({ method: 'eth_chainId' });
-            if (chainId !== BASE_SEPOLIA_ID) {
-                const switched = await switchToBaseSepolia(selectedProvider);
-                if (!switched) return;
-            }
-
-            betStatusEl.textContent = '正在准备交易...';
+            if (!GameState.matchId) return alert('当前无比赛进行中');
+            const botId = els.betBot.value.trim();
+            if (!botId) return alert('请输入 Bot 名称');
             
+            if (!WalletState.isConnected) {
+                alert('请先连接钱包');
+                return;
+            }
+
+            els.betStatus.textContent = '检查网络...';
+            
+            // Network Check
+            const chainId = await WalletState.provider.request({ method: 'eth_chainId' });
+            if (chainId !== BASE_SEPOLIA_ID) {
+                els.betStatus.textContent = '切换网络...';
+                const success = await switchToBaseSepolia(WalletState.provider);
+                if (!success) {
+                    els.betStatus.textContent = '网络错误: 请切到 Base Sepolia';
+                    return;
+                }
+            }
+
+            els.betStatus.textContent = '请在钱包确认...';
+
             try {
-                const provider = new ethers.BrowserProvider(selectedProvider);
+                const provider = new ethers.BrowserProvider(WalletState.provider);
                 const signer = await provider.getSigner();
                 const contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
                 
                 const value = ethers.parseEther(amount.toString());
                 
-                betStatusEl.textContent = '请在钱包中确认...';
+                const tx = await contract.placeBet(GameState.matchId, botId, { value });
+                els.betStatus.textContent = '广播中... ' + shortAddr(tx.hash);
                 
-                // Call contract
-                const tx = await contract.placeBet(currentMatchId, botName, { value });
-                
-                betStatusEl.textContent = '交易广播中: ' + shortAddr(tx.hash);
-                
-                // Wait for confirmation
                 await tx.wait();
-                
-                betStatusEl.textContent = '交易已确认！通知服务器...';
+                els.betStatus.textContent = '交易确认! 提交服务器...';
 
-                // Notify backend
                 const res = await fetch('/api/bet/place', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ 
-                        matchId: currentMatchId, 
-                        botId: botName, 
+                        matchId: GameState.matchId, 
+                        botId: botId, 
                         amount,
                         txHash: tx.hash,
-                        bettor: await signer.getAddress()
+                        bettor: WalletState.account
                     })
                 });
-                
                 const data = await res.json();
                 if (data.ok) {
-                    betStatusEl.textContent = '✅ 已下单';
-                    betTotalEl.textContent = data.total || betTotalEl.textContent;
+                    els.betStatus.textContent = '✅ 已下单';
+                    if (data.total) els.betTotal.textContent = data.total;
                 } else {
-                    betStatusEl.textContent = '⚠️ 链上成功但服务器未确认: ' + (data.error || 'Unknown');
+                    els.betStatus.textContent = '⚠️ 后端未确认';
                 }
-                
-            } catch (err) {
-                console.error('Bet Error:', err);
-                if (err.code === 'ACTION_REJECTED' || err.code === 4001) { // 4001 is MetaMask user rejection
-                    betStatusEl.textContent = '用户取消';
-                } else if (!window.ethers) {
-                    betStatusEl.textContent = '系统错误: Ethers库未加载';
-                    alert('请检查网络连接，无法加载Web3库');
+
+            } catch (e) {
+                console.error(e);
+                if (e.code === 'ACTION_REJECTED' || e.code === 4001) {
+                    els.betStatus.textContent = '用户取消';
                 } else {
-                    betStatusEl.textContent = '失败: ' + (err.shortMessage || err.message || '未知错误');
+                    els.betStatus.textContent = '失败: ' + (e.message || 'Error');
                 }
             }
         }
 
-        if (bet001) bet001.onclick = () => placeBet(0.01);
-        if (bet01) bet01.onclick = () => placeBet(0.1);
-        if (bet1) bet1.onclick = () => placeBet(1);
-        if (betConfirm) betConfirm.onclick = () => {
-            const amt = parseFloat(betAmountEl.value || '0');
-            if (amt > 0) placeBet(amt);
+        // Bind Bet Buttons
+        els.betBtns.forEach(btn => {
+            if (btn.el) btn.el.onclick = () => placeBet(btn.val);
+        });
+        if (els.betConfirm) els.betConfirm.onclick = () => {
+            const val = parseFloat(els.betAmount.value);
+            if (val > 0) placeBet(val);
         };
-        if (betAmountEl) betAmountEl.onchange = () => {
-            const amt = parseFloat(betAmountEl.value || '0');
-            if (amt > 0) placeBet(amt);
+
+        // --- BOT & GAME LOGIC ---
+        
+        async function initBot() {
+            if (GameState.myBotId) {
+                els.botId.textContent = GameState.myBotId;
+                try {
+                    const res = await fetch('/api/bot/' + GameState.myBotId);
+                    if (res.ok) {
+                        els.botStatus.textContent = '已注册';
+                        els.botUpdate.disabled = false;
+                        els.botUpdate.classList.remove('btn-disabled');
+                    }
+                } catch(e) {}
+            }
+        }
+        initBot();
+
+        els.botRegister.onclick = async () => {
+            const name = els.botName.value || 'AgentBot';
+            const res = await fetch('/api/bot/register', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, price: 0.01, botType: 'agent' })
+            });
+            const data = await res.json();
+            if (data.id) {
+                GameState.myBotId = data.id;
+                localStorage.setItem('myBotId', data.id);
+                els.botId.textContent = data.id;
+                els.botStatus.textContent = '上传成功';
+                els.botUpdate.disabled = false;
+                els.botUpdate.classList.remove('btn-disabled');
+            }
         };
+
+        // --- VISUALIZATION ---
+        let ws = null;
+        const ctx = els.canvas.getContext('2d');
+        const cellSize = els.canvas.width / 30;
+
+        function connectWS(arenaId) {
+            if (ws) ws.close();
+            const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+            ws = new WebSocket(`${proto}://${location.host}?arenaId=${arenaId}`);
+            ws.onopen = () => { els.status.textContent = 'Connected!'; };
+            ws.onclose = () => { els.status.textContent = 'Disconnected...'; };
+            ws.onmessage = (e) => {
+                const msg = JSON.parse(e.data);
+                if (msg.type === 'update') render(msg.state);
+            };
+        }
+
+        function setView(view) {
+            GameState.view = view;
+            document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
+            document.querySelector(`.tab[data-view="${view}"]`).classList.add('active');
+
+            if (view === 'performance') {
+                GameState.arenaId = 'performance-1';
+                connectWS('performance-1');
+            } else if (view === 'competitive') {
+                GameState.arenaId = 'competitive-1';
+                connectWS('competitive-1');
+            }
+            // Add leaderboard logic if needed...
+        }
+
+        document.querySelectorAll('.tab').forEach(btn => {
+            btn.onclick = () => setView(btn.dataset.view);
+        });
+
+        // Initial View
+        setView('performance');
 
         function render(state) {
-            gridSize = state.gridSize || 30;
-            const arenaId = state.arenaId || '--';
-            const arenaType = state.arenaType || 'performance';
-            currentMatchId = state.matchId || null;
-            betTotalEl.textContent = currentMatchId ? ('#' + currentMatchId) : '--';
-            matchInfo.textContent = 'MATCH #' + (state.matchId || '?');
+            GameState.matchId = state.matchId;
+            els.matchInfo.textContent = 'MATCH #' + (state.matchId || '?');
+            els.betTotal.textContent = state.matchId ? ('#' + state.matchId) : '--';
 
+            // Timer & Status
             if (state.gameState === 'PLAYING') {
-                const timeLeft = state.matchTimeLeft || 0;
-                const mins = Math.floor(timeLeft / 60);
-                const secs = timeLeft % 60;
-                timerDisplay.textContent = mins + ':' + String(secs).padStart(2, '0');
-                timerDisplay.style.color = timeLeft < 30 ? '#ff3333' : '#ff8800';
+                const min = Math.floor(state.matchTimeLeft/60);
+                const sec = state.matchTimeLeft%60;
+                els.timer.textContent = `${min}:${sec.toString().padStart(2,'0')}`;
+                els.timer.style.color = state.matchTimeLeft < 30 ? '#ff3333' : '#ff8800';
             } else if (state.gameState === 'COUNTDOWN') {
-                timerDisplay.textContent = 'Starting in ' + state.timeLeft + 's';
-                timerDisplay.style.color = '#00ff88';
+                els.timer.textContent = `Starting in ${state.timeLeft}s`;
+                els.timer.style.color = '#00ff88';
+                els.overlay.innerHTML = '<div class="overlay-text">GET READY!</div>';
             } else if (state.gameState === 'GAMEOVER') {
-                timerDisplay.textContent = 'Next match in ' + state.timeLeft + 's';
-                timerDisplay.style.color = '#888';
-            }
-
-            const alive = state.players.filter(p => p.alive).length;
-            status.innerHTML = 'ALIVE: <span>' + alive + '</span> / ' + state.players.length;
-
-            if (state.gameState === 'COUNTDOWN') {
-                overlay.innerHTML = '<div class="overlay-text">GET READY!</div>';
-            } else if (state.gameState === 'GAMEOVER') {
-                overlay.innerHTML = '<div class="overlay-text">🏆</div><div class="overlay-text">' + (state.winner || 'NO WINNER') + '</div>';
-            } else if (state.victoryPause) {
-                const winner = state.players.find(p => p.alive);
-                overlay.innerHTML = '<div class="overlay-text">🏆</div><div class="overlay-text">' + (winner ? winner.name : '') + ' WINS!</div>';
+                els.timer.textContent = `Next in ${state.timeLeft}s`;
+                els.timer.style.color = '#888';
+                els.overlay.innerHTML = `<div class="overlay-text">🏆</div><div class="overlay-text">${state.winner || 'NO WINNER'}</div>`;
             } else {
-                overlay.innerHTML = '';
+                els.overlay.innerHTML = '';
             }
 
+            // Draw
             ctx.fillStyle = '#000';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-
+            ctx.fillRect(0, 0, els.canvas.width, els.canvas.height);
+            
+            // Grid
             ctx.strokeStyle = '#1a1a2e';
             ctx.lineWidth = 0.5;
-            for (let i = 0; i <= gridSize; i++) {
-                ctx.beginPath();
-                ctx.moveTo(i * cellSize, 0);
-                ctx.lineTo(i * cellSize, canvas.height);
-                ctx.stroke();
-                ctx.beginPath();
-                ctx.moveTo(0, i * cellSize);
-                ctx.lineTo(canvas.width, i * cellSize);
-                ctx.stroke();
+            for (let i = 0; i <= 30; i++) {
+                ctx.beginPath(); ctx.moveTo(i*cellSize, 0); ctx.lineTo(i*cellSize, els.canvas.height); ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(0, i*cellSize); ctx.lineTo(els.canvas.width, i*cellSize); ctx.stroke();
             }
 
-            if (state.gameState === 'GAMEOVER') {
-                ctx.fillStyle = 'rgba(0,0,0,0.55)';
-                ctx.fillRect(0, 0, canvas.width, canvas.height);
-            }
-
+            // Food
             ctx.fillStyle = '#ff0055';
-            ctx.shadowColor = '#ff0055';
-            ctx.shadowBlur = 10;
-            (state.food || []).forEach(f => {
-                ctx.beginPath();
-                ctx.arc(f.x * cellSize + cellSize/2, f.y * cellSize + cellSize/2, cellSize/3, 0, Math.PI * 2);
-                ctx.fill();
+            state.food.forEach(f => {
+                ctx.beginPath(); ctx.arc(f.x*cellSize+cellSize/2, f.y*cellSize+cellSize/2, cellSize/3, 0, Math.PI*2); ctx.fill();
             });
-            ctx.shadowBlur = 0;
 
-            state.players.forEach(p => {
-                if (!p.body || p.body.length === 0) return;
-                const isBlinking = !p.alive && p.blinking;
-                if (isBlinking && Math.floor(Date.now() / 500) % 2 === 0) return;
-
-                ctx.fillStyle = p.color || '#00ff88';
-                ctx.shadowColor = p.color || '#00ff88';
-                ctx.shadowBlur = p.alive ? 8 : 3;
-                ctx.globalAlpha = p.alive ? 1 : 0.5;
-
-                const name = p.name || '';
-                p.body.forEach((seg, i) => {
-                    if (i === 0) return;
-                    ctx.fillRect(seg.x * cellSize + 1, seg.y * cellSize + 1, cellSize - 2, cellSize - 2);
-                    const letterIndex = i - 1;
-                    if (letterIndex < name.length) {
-                        ctx.save();
-                        ctx.fillStyle = '#000';
-                        ctx.font = 'bold ' + Math.floor(cellSize * 0.6) + 'px Orbitron';
-                        ctx.textAlign = 'center';
-                        ctx.textBaseline = 'middle';
-                        ctx.shadowBlur = 0;
-                        ctx.fillText(name[letterIndex].toUpperCase(), seg.x * cellSize + cellSize/2, seg.y * cellSize + cellSize/2 + 1);
-                        ctx.restore();
-                        ctx.fillStyle = p.color || '#00ff88';
-                    }
+            // Players
+            const players = state.players || [];
+            players.forEach(p => {
+                if (!p.body.length) return;
+                ctx.fillStyle = p.alive ? (p.color || '#00ff88') : '#555';
+                p.body.forEach(seg => {
+                    ctx.fillRect(seg.x*cellSize+1, seg.y*cellSize+1, cellSize-2, cellSize-2);
                 });
-
-                const head = p.body[0];
-                const dir = p.direction || {x:1, y:0};
-                const cx = head.x * cellSize + cellSize/2;
-                const cy = head.y * cellSize + cellSize/2;
-                const size = cellSize/2 - 1;
-
-                ctx.beginPath();
-                if (dir.x === 1) {
-                    ctx.moveTo(cx + size, cy);
-                    ctx.lineTo(cx - size, cy - size);
-                    ctx.lineTo(cx - size, cy + size);
-                } else if (dir.x === -1) {
-                    ctx.moveTo(cx - size, cy);
-                    ctx.lineTo(cx + size, cy - size);
-                    ctx.lineTo(cx + size, cy + size);
-                } else if (dir.y === -1) {
-                    ctx.moveTo(cx, cy - size);
-                    ctx.lineTo(cx - size, cy + size);
-                    ctx.lineTo(cx + size, cy + size);
-                } else {
-                    ctx.moveTo(cx, cy + size);
-                    ctx.lineTo(cx - size, cy - size);
-                    ctx.lineTo(cx + size, cy - size);
-                }
-                ctx.closePath();
-                ctx.fill();
-
-                ctx.shadowBlur = 0;
-                ctx.globalAlpha = 1;
             });
 
-            const allPlayers = [].concat(state.players).sort((a, b) => b.body.length - a.body.length);
-            const waiting = (state.waitingPlayers || []).map(p => ({ ...p, waiting: true }));
-            const merged = allPlayers.concat(waiting);
-            fightersList.innerHTML = merged.map(p =>
-                '<li class="fighter-item ' + (p.waiting ? 'alive' : (p.alive ? 'alive' : 'dead')) + '">' +
-                '<span class="fighter-name" style="color:' + (p.color || '#fff') + '">' + p.name + (p.waiting ? ' (waiting)' : '') + '</span>' +
-                '<span class="fighter-length">' + ((p.body && p.body.length) || 0) + ' ' + (p.waiting ? '⏳' : (p.alive ? '🐍' : '💀')) + '</span>' +
-                '</li>'
+            // List
+            els.fighters.innerHTML = players.map(p => 
+                `<li class="fighter-item ${p.alive?'alive':'dead'}"><span class="fighter-name" style="color:${p.color}">${p.name}</span><span class="fighter-length">${p.body.length}</span></li>`
             ).join('');
+            
+            const waiting = state.waitingPlayers || [];
+            if (waiting.length > 0) {
+                els.fighters.innerHTML += waiting.map(p => 
+                    `<li class="fighter-item"><span class="fighter-name" style="color:${p.color}">${p.name} (Wait)</span><span>⏳</span></li>`
+                ).join('');
+            }
+            
+            els.status.innerHTML = `ALIVE: <span>${players.filter(p=>p.alive).length}</span> / ${players.length}`;
         }
+
     </script>
 </body>
 </html>
