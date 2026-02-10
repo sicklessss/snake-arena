@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>SNAKE ARENA v3</title>
+    <title>SNAKE ARENA v4 (EIP-6963)</title>
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
     <style>
         :root { --bg-color: #050510; --panel: #0a0a1a; --neon-green: #00ff88; --neon-pink: #ff0055; --neon-blue: #00ccff; --text-dim: #8a8aa8; }
@@ -40,6 +40,7 @@
         .fighter-name { font-weight: bold; }
         .fighter-length { color: var(--neon-blue); }
         .muted { color: var(--text-dim); font-size: 0.85rem; }
+
         /* --- Wallet Modal Styles --- */
         .modal-overlay {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
@@ -174,7 +175,7 @@
             walletStatus: document.getElementById('wallet-status'),
             walletBalance: document.getElementById('wallet-balance'),
             walletBtn: document.getElementById('wallet-connect'),
-            // Modal Elements
+            // Modal
             walletModal: document.getElementById('wallet-modal'),
             walletList: document.getElementById('wallet-list'),
             closeModal: document.getElementById('close-modal-btn'),
@@ -205,30 +206,29 @@
             leaderboard: document.getElementById('leaderboard')
         };
 
-        // --- WALLET LOGIC (REWRITTEN) ---
+        // --- EIP-6963 WALLET DISCOVERY ---
+        let detectedProviders = []; 
 
-        function getEthereumProviders() {
-            const providers = [];
-            
-            // 1. Standard Injection
+        window.addEventListener("eip6963:announceProvider", (event) => {
+            const { info, provider } = event.detail;
+            // Deduplicate by UUID
+            if (detectedProviders.some(p => p.info.uuid === info.uuid)) return;
+            detectedProviders.push({ info, provider });
+        });
+
+        // Trigger discovery immediately
+        window.dispatchEvent(new Event("eip6963:requestProvider"));
+
+        function getProvidersLegacy() {
+            const list = [];
             if (window.ethereum) {
-                if (window.ethereum.providers && Array.isArray(window.ethereum.providers)) {
-                    providers.push(...window.ethereum.providers);
-                } else {
-                    providers.push(window.ethereum);
-                }
+                if (window.ethereum.providers) list.push(...window.ethereum.providers);
+                else list.push(window.ethereum);
             }
-
-            // 2. Explicit Injections (for wallets that don't play nice with EIP-6963 yet)
-            if (window.okxwallet) providers.push(window.okxwallet);
-            if (window.coinbaseWalletExtension) providers.push(window.coinbaseWalletExtension);
-            if (window.trustwallet) providers.push(window.trustwallet);
-            if (window.phantom?.ethereum) providers.push(window.phantom.ethereum);
-            if (window.bitkeep?.ethereum) providers.push(window.bitkeep.ethereum);
-
-            // Deduplicate
-            return [...new Set(providers)];
+            return list;
         }
+
+        // --- WALLET LOGIC ---
 
         function shortAddr(addr) {
             return addr ? addr.slice(0, 6) + '...' + addr.slice(-4) : '--';
@@ -257,92 +257,83 @@
 
         function resetWallet() {
             WalletState = { provider: null, account: null, isConnected: false };
+            els.walletModal.style.display = 'none';
             updateUI();
         }
 
         els.closeModal.onclick = () => { els.walletModal.style.display = 'none'; };
-        
-        // Close on outside click
         els.walletModal.onclick = (e) => {
             if (e.target === els.walletModal) els.walletModal.style.display = 'none';
         };
 
-        function getProviderName(p) {
-            if (p.isMetaMask && !p.isBitKeep && !p.isTokenPocket && !p.isOkxWallet) return 'MetaMask';
-            if (p.isOkxWallet) return 'OKX Wallet';
-            if (p.isTrust) return 'Trust Wallet';
-            if (p.isCoinbaseWallet) return 'Coinbase';
-            if (p.isBitKeep) return 'BitKeep';
-            if (p.isPhantom) return 'Phantom';
-            if (p.isRabby) return 'Rabby';
-            if (p === window.okxwallet) return 'OKX Wallet';
-            return 'Web3 Wallet';
-        }
-
         async function handleConnectClick() {
-            // Case 1: Already connected -> Disconnect
+            // Case 1: Disconnect
             if (WalletState.isConnected) {
-                if (confirm('是否断开当前钱包？')) {
-                    resetWallet();
-                }
+                if (confirm('是否断开当前钱包？')) resetWallet();
                 return;
             }
 
-            // Case 2: Open Modal
-            const providers = getEthereumProviders();
-            if (providers.length === 0) {
-                // If no providers, maybe redirect to MetaMask?
-                return alert('未检测到钱包。请安装 MetaMask 或 OKX Wallet。');
-            }
+            // Refresh Discovery
+            window.dispatchEvent(new Event("eip6963:requestProvider"));
 
             els.walletList.innerHTML = '';
-            
-            // If only one provider, we still show the modal to let user confirm (or we can auto-connect)
-            // But user asked for "pop up a prompt", so we show it.
-            
-            providers.forEach((p, idx) => {
-                const btn = document.createElement('button');
-                btn.className = 'wallet-option';
-                const name = getProviderName(p);
-                // Simple icon placeholders (colors)
-                let color = '#fff';
-                if (name.includes('MetaMask')) color = '#f6851b';
-                if (name.includes('OKX')) color = '#000';
-                if (name.includes('Coinbase')) color = '#0052ff';
-                
-                btn.innerHTML = `<span>${name}</span><div class="wallet-icon" style="background:${color}"></div>`;
-                
-                btn.onclick = async () => {
-                    els.walletModal.style.display = 'none';
-                    await connectToProvider(p);
-                };
-                els.walletList.appendChild(btn);
-            });
+            let hasOptions = false;
+
+            // 1. EIP-6963 Wallets
+            if (detectedProviders.length > 0) {
+                detectedProviders.forEach((entry) => {
+                    hasOptions = true;
+                    const btn = document.createElement('button');
+                    btn.className = 'wallet-option';
+                    btn.innerHTML = `<span>${entry.info.name}</span><img src="${entry.info.icon}" style="width:24px;height:24px;">`;
+                    btn.onclick = async () => {
+                        els.walletModal.style.display = 'none';
+                        await connectToProvider(entry.provider);
+                    };
+                    els.walletList.appendChild(btn);
+                });
+            }
+
+            // 2. Legacy Fallback (Only if no EIP-6963 found, or to catch non-compliant ones)
+            // But usually modern wallets support 6963. If detectedProviders is empty, try window.ethereum
+            if (detectedProviders.length === 0) {
+                const legacyList = getProvidersLegacy();
+                if (legacyList.length > 0) {
+                    legacyList.forEach(p => {
+                        hasOptions = true;
+                        // Guess name
+                        const isOKX = p.isOkxWallet;
+                        const isMM = p.isMetaMask && !isOKX;
+                        const name = isOKX ? 'OKX Wallet (Legacy)' : (isMM ? 'MetaMask (Legacy)' : 'Wallet');
+                        
+                        const btn = document.createElement('button');
+                        btn.className = 'wallet-option';
+                        btn.innerHTML = `<span>${name}</span><div class="wallet-icon"></div>`;
+                        btn.onclick = async () => {
+                            els.walletModal.style.display = 'none';
+                            await connectToProvider(p);
+                        };
+                        els.walletList.appendChild(btn);
+                    });
+                }
+            }
+
+            if (!hasOptions) {
+                return alert('未检测到钱包插件。请安装 MetaMask 或 OKX Wallet。');
+            }
 
             els.walletModal.style.display = 'flex';
         }
 
-        // Removed old walletConfirm listener
-        
         async function connectToProvider(provider) {
             try {
-                // Try to request permissions to force a popup if possible (for switching)
-                // But fallback quickly if it fails
-                let accounts;
-                try {
-                    // Try standard request first
-                    accounts = await provider.request({ method: 'eth_requestAccounts' });
-                } catch (e) {
-                    throw e;
-                }
-
-                if (!accounts || accounts.length === 0) throw new Error('No accounts found');
+                const accounts = await provider.request({ method: 'eth_requestAccounts' });
+                if (!accounts || accounts.length === 0) throw new Error('No accounts');
 
                 WalletState.provider = provider;
                 WalletState.account = accounts[0];
                 WalletState.isConnected = true;
 
-                // Bind events
                 provider.on('accountsChanged', (accs) => {
                     if (accs.length === 0) resetWallet();
                     else {
@@ -353,11 +344,9 @@
                 provider.on('chainChanged', () => window.location.reload());
 
                 updateUI();
-
             } catch (e) {
                 console.error(e);
                 alert('连接失败: ' + (e.message || e.code));
-                resetWallet();
             }
         }
 
@@ -386,10 +375,7 @@
                             }],
                         });
                         return true;
-                    } catch (addErr) {
-                        console.error(addErr);
-                        return false;
-                    }
+                    } catch (addErr) { return false; }
                 }
                 return false;
             }
@@ -406,14 +392,12 @@
             }
 
             els.betStatus.textContent = '检查网络...';
-            
-            // Network Check
             const chainId = await WalletState.provider.request({ method: 'eth_chainId' });
             if (chainId !== BASE_SEPOLIA_ID) {
                 els.betStatus.textContent = '切换网络...';
                 const success = await switchToBaseSepolia(WalletState.provider);
                 if (!success) {
-                    els.betStatus.textContent = '网络错误: 请切到 Base Sepolia';
+                    els.betStatus.textContent = '网络错误';
                     return;
                 }
             }
@@ -426,7 +410,6 @@
                 const contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
                 
                 const value = ethers.parseEther(amount.toString());
-                
                 const tx = await contract.placeBet(GameState.matchId, botId, { value });
                 els.betStatus.textContent = '广播中... ' + shortAddr(tx.hash);
                 
@@ -462,10 +445,7 @@
             }
         }
 
-        // Bind Bet Buttons
-        els.betBtns.forEach(btn => {
-            if (btn.el) btn.el.onclick = () => placeBet(btn.val);
-        });
+        els.betBtns.forEach(btn => { if (btn.el) btn.el.onclick = () => placeBet(btn.val); });
         if (els.betConfirm) els.betConfirm.onclick = () => {
             const val = parseFloat(els.betAmount.value);
             if (val > 0) placeBet(val);
@@ -506,6 +486,11 @@
             }
         };
 
+        if (els.botUpdate) els.botUpdate.onclick = async () => {
+            if (els.botUpdate.disabled) return;
+            els.botStatus.textContent = '已更新灵魂';
+        };
+
         // --- VISUALIZATION ---
         let ws = null;
         const ctx = els.canvas.getContext('2d');
@@ -535,14 +520,12 @@
                 GameState.arenaId = 'competitive-1';
                 connectWS('competitive-1');
             }
-            // Add leaderboard logic if needed...
         }
 
         document.querySelectorAll('.tab').forEach(btn => {
             btn.onclick = () => setView(btn.dataset.view);
         });
 
-        // Initial View
         setView('performance');
 
         function render(state) {
@@ -550,7 +533,6 @@
             els.matchInfo.textContent = 'MATCH #' + (state.matchId || '?');
             els.betTotal.textContent = state.matchId ? ('#' + state.matchId) : '--';
 
-            // Timer & Status
             if (state.gameState === 'PLAYING') {
                 const min = Math.floor(state.matchTimeLeft/60);
                 const sec = state.matchTimeLeft%60;
@@ -568,11 +550,9 @@
                 els.overlay.innerHTML = '';
             }
 
-            // Draw
             ctx.fillStyle = '#000';
             ctx.fillRect(0, 0, els.canvas.width, els.canvas.height);
             
-            // Grid
             ctx.strokeStyle = '#1a1a2e';
             ctx.lineWidth = 0.5;
             for (let i = 0; i <= 30; i++) {
@@ -580,13 +560,11 @@
                 ctx.beginPath(); ctx.moveTo(0, i*cellSize); ctx.lineTo(els.canvas.width, i*cellSize); ctx.stroke();
             }
 
-            // Food
             ctx.fillStyle = '#ff0055';
             state.food.forEach(f => {
                 ctx.beginPath(); ctx.arc(f.x*cellSize+cellSize/2, f.y*cellSize+cellSize/2, cellSize/3, 0, Math.PI*2); ctx.fill();
             });
 
-            // Players
             const players = state.players || [];
             players.forEach(p => {
                 if (!p.body.length) return;
@@ -596,7 +574,6 @@
                 });
             });
 
-            // List
             els.fighters.innerHTML = players.map(p => 
                 `<li class="fighter-item ${p.alive?'alive':'dead'}"><span class="fighter-name" style="color:${p.color}">${p.name}</span><span class="fighter-length">${p.body.length}</span></li>`
             ).join('');
@@ -610,7 +587,6 @@
             
             els.status.innerHTML = `ALIVE: <span>${players.filter(p=>p.alive).length}</span> / ${players.length}`;
         }
-
     </script>
 </body>
 </html>
