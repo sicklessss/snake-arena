@@ -42,6 +42,13 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
+app.use((req, res, next) => {
+    res.header('Cache-Control', 'private, no-cache, no-store, must-revalidate');
+    res.header('Expires', '-1');
+    res.header('Pragma', 'no-cache');
+    next();
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(bodyParser.json());
 
@@ -1017,15 +1024,45 @@ app.post('/api/bot/stop', (req, res) => {
 });
 
 // --- Betting (MVP, in-memory) ---
-const betPools = {}; // matchId -> { total, bets: [{botId, amount}] }
+const betPools = {}; // matchId -> { total: 0, bets: [] }
 
 app.post('/api/bet/place', (req, res) => {
-    const { matchId, botId, amount } = req.body || {};
-    if (!matchId || !botId || !amount) return res.status(400).json({ error: 'invalid' });
-    if (!betPools[matchId]) betPools[matchId] = { total: 0, bets: [] };
-    betPools[matchId].bets.push({ botId, amount: Number(amount) });
-    betPools[matchId].total += Number(amount);
-    res.json({ ok: true, total: betPools[matchId].total });
+    // bettor is the wallet address, txHash is the transaction hash on Base Sepolia
+    const { matchId, botId, amount, txHash, bettor } = req.body || {};
+    
+    if (!matchId || !botId || !amount) {
+        return res.status(400).json({ error: 'Missing required fields: matchId, botId, amount' });
+    }
+
+    // Initialize pool for this match if not exists
+    if (!betPools[matchId]) {
+        betPools[matchId] = { total: 0, bets: [] };
+    }
+
+    const betAmount = Number(amount);
+    if (isNaN(betAmount) || betAmount <= 0) {
+        return res.status(400).json({ error: 'Invalid amount' });
+    }
+
+    // Record the bet
+    betPools[matchId].bets.push({ 
+        botId, 
+        amount: betAmount,
+        bettor: bettor || 'anonymous',
+        txHash: txHash || null,
+        timestamp: Date.now()
+    });
+
+    betPools[matchId].total += betAmount;
+
+    console.log(`[Bet] New bet on match #${matchId}: ${betAmount} ETH on ${botId} by ${bettor} (Tx: ${txHash})`);
+
+    res.json({ 
+        ok: true, 
+        total: betPools[matchId].total,
+        matchId,
+        yourBet: { botId, amount: betAmount }
+    });
 });
 
 app.get('/api/bet/status', (req, res) => {
