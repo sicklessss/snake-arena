@@ -533,6 +533,7 @@
             els.matchInfo.textContent = 'MATCH #' + (state.matchId || '?');
             els.betTotal.textContent = state.matchId ? ('#' + state.matchId) : '--';
 
+            // Timer & Status
             if (state.gameState === 'PLAYING') {
                 const min = Math.floor(state.matchTimeLeft/60);
                 const sec = state.matchTimeLeft%60;
@@ -546,13 +547,18 @@
                 els.timer.textContent = `Next in ${state.timeLeft}s`;
                 els.timer.style.color = '#888';
                 els.overlay.innerHTML = `<div class="overlay-text">🏆</div><div class="overlay-text">${state.winner || 'NO WINNER'}</div>`;
+            } else if (state.victoryPause) {
+                const winner = state.players.find(p => p.alive);
+                els.overlay.innerHTML = `<div class="overlay-text">🏆</div><div class="overlay-text">${winner ? winner.name : ''} WINS!</div>`;
             } else {
                 els.overlay.innerHTML = '';
             }
 
+            // Clear
             ctx.fillStyle = '#000';
             ctx.fillRect(0, 0, els.canvas.width, els.canvas.height);
             
+            // Grid
             ctx.strokeStyle = '#1a1a2e';
             ctx.lineWidth = 0.5;
             for (let i = 0; i <= 30; i++) {
@@ -560,22 +566,87 @@
                 ctx.beginPath(); ctx.moveTo(0, i*cellSize); ctx.lineTo(els.canvas.width, i*cellSize); ctx.stroke();
             }
 
+            // Food
             ctx.fillStyle = '#ff0055';
+            ctx.shadowColor = '#ff0055'; ctx.shadowBlur = 10;
             state.food.forEach(f => {
                 ctx.beginPath(); ctx.arc(f.x*cellSize+cellSize/2, f.y*cellSize+cellSize/2, cellSize/3, 0, Math.PI*2); ctx.fill();
             });
+            ctx.shadowBlur = 0;
 
+            // Players
             const players = state.players || [];
             players.forEach(p => {
-                if (!p.body.length) return;
-                ctx.fillStyle = p.alive ? (p.color || '#00ff88') : '#555';
-                p.body.forEach(seg => {
-                    ctx.fillRect(seg.x*cellSize+1, seg.y*cellSize+1, cellSize-2, cellSize-2);
+                if (!p.body || p.body.length === 0) return;
+                
+                // Dead/Blink Logic
+                const isBlinking = !p.alive && p.blinking;
+                if (isBlinking && Math.floor(Date.now() / 500) % 2 === 0) return;
+
+                ctx.fillStyle = p.color || '#00ff88';
+                ctx.shadowColor = p.color || '#00ff88';
+                ctx.shadowBlur = p.alive ? 8 : 0;
+                ctx.globalAlpha = p.alive ? 1 : 0.4; // Dim dead snakes
+
+                const name = p.name || '';
+                
+                // Body
+                p.body.forEach((seg, i) => {
+                    if (i === 0) return; // Skip head for now
+                    ctx.fillRect(seg.x * cellSize + 1, seg.y * cellSize + 1, cellSize - 2, cellSize - 2);
+                    
+                    // Name letters
+                    const letterIndex = i - 1;
+                    if (letterIndex < name.length) {
+                        ctx.save();
+                        ctx.fillStyle = '#000';
+                        ctx.font = 'bold ' + Math.floor(cellSize * 0.6) + 'px Orbitron';
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'middle';
+                        ctx.shadowBlur = 0;
+                        ctx.fillText(name[letterIndex].toUpperCase(), seg.x * cellSize + cellSize/2, seg.y * cellSize + cellSize/2 + 1);
+                        ctx.restore();
+                        // Restore snake color
+                        ctx.fillStyle = p.color || '#00ff88';
+                    }
                 });
+
+                // Head
+                const head = p.body[0];
+                const dir = p.direction || {x:1, y:0};
+                const cx = head.x * cellSize + cellSize/2;
+                const cy = head.y * cellSize + cellSize/2;
+                const size = cellSize/2 - 1;
+
+                ctx.beginPath();
+                if (dir.x === 1) {
+                    ctx.moveTo(cx + size, cy);
+                    ctx.lineTo(cx - size, cy - size);
+                    ctx.lineTo(cx - size, cy + size);
+                } else if (dir.x === -1) {
+                    ctx.moveTo(cx - size, cy);
+                    ctx.lineTo(cx + size, cy - size);
+                    ctx.lineTo(cx + size, cy + size);
+                } else if (dir.y === -1) {
+                    ctx.moveTo(cx, cy - size);
+                    ctx.lineTo(cx - size, cy + size);
+                    ctx.lineTo(cx + size, cy + size);
+                } else {
+                    ctx.moveTo(cx, cy + size);
+                    ctx.lineTo(cx - size, cy - size);
+                    ctx.lineTo(cx + size, cy - size);
+                }
+                ctx.closePath();
+                ctx.fill();
+
+                ctx.shadowBlur = 0;
+                ctx.globalAlpha = 1;
             });
 
-            els.fighters.innerHTML = players.map(p => 
-                `<li class="fighter-item ${p.alive?'alive':'dead'}"><span class="fighter-name" style="color:${p.color}">${p.name}</span><span class="fighter-length">${p.body.length}</span></li>`
+            // List
+            const sorted = [...players].sort((a, b) => b.body.length - a.body.length);
+            els.fighters.innerHTML = sorted.map(p => 
+                `<li class="fighter-item ${p.alive?'alive':'dead'}"><span class="fighter-name" style="color:${p.color}">${p.name}</span><span class="fighter-length">${p.body.length} ${p.alive ? '🐍' : '💀'}</span></li>`
             ).join('');
             
             const waiting = state.waitingPlayers || [];
