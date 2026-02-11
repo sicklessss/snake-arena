@@ -227,6 +227,16 @@ function isOpposite(dir1, dir2) {
     return dir1.x === -dir2.x && dir1.y === -dir2.y;
 }
 
+function randomDirection() {
+    const dirs = [
+        { x: 1, y: 0 },
+        { x: -1, y: 0 },
+        { x: 0, y: 1 },
+        { x: 0, y: -1 },
+    ];
+    return dirs[Math.floor(Math.random() * dirs.length)];
+}
+
 class GameRoom {
     constructor({ id, type }) {
         this.id = id;
@@ -326,6 +336,18 @@ class GameRoom {
         }
 
         this.turn++;
+
+        // Auto-move for normal bots (no ws)
+        Object.values(this.players).forEach((p) => {
+            if (p.botType === 'normal' && !p.ws) {
+                let dir = randomDirection();
+                // Avoid reversing direction
+                if (isOpposite(dir, p.direction)) {
+                    dir = randomDirection();
+                }
+                p.nextDirection = dir;
+            }
+        });
 
         while (this.food.length < MAX_FOOD) {
             let tries = 0;
@@ -641,6 +663,13 @@ class GameRoom {
         return victimId || null;
     }
 
+    findKickableOldAgent() {
+        const ids = Object.keys(this.waitingRoom);
+        // Prefer kicking low-price/old agents (<=0.01)
+        const victimId = ids.find((id) => this.waitingRoom[id].botType === 'agent' && (this.waitingRoom[id].botPrice || 0) <= 0.01);
+        return victimId || null;
+    }
+
     handleJoin(data, ws) {
         let name = data.name || 'Bot';
         const isHero = name && name.includes('HERO');
@@ -684,6 +713,7 @@ class GameRoom {
             ws: ws,
             botType,
             botId: data.botId || null,
+            botPrice: data.botPrice || 0,
         };
         ws.send(JSON.stringify({ type: 'queued', id: id, botId: data.botId || null }));
         return { ok: true, id };
@@ -727,9 +757,25 @@ createRoom('performance');
 createRoom('competitive');
 createRoom('competitive');
 
+function seedNormalBots(room, count = 9) {
+    for (let i = 0; i < count; i++) {
+        const id = 'normal_' + Math.random().toString(36).slice(2, 7);
+        room.waitingRoom[id] = {
+            id,
+            name: 'Normal-' + id.slice(-3),
+            color: getNextColor(),
+            ws: null,
+            botType: 'normal',
+            botId: null,
+            botPrice: 0,
+        };
+    }
+}
+
 function assignRoomForJoin(data) {
     const botType = data.botType || (data.name && data.name.includes('HERO') ? 'hero' : 'normal');
     const arenaType = data.arenaType || 'performance';
+    const botPrice = data.botPrice || 0;
 
     if (arenaType === 'competitive') {
         return competitiveRooms[0];
@@ -745,10 +791,23 @@ function assignRoomForJoin(data) {
 
         // create new performance room if allowed
         if (performanceRooms.length < ROOM_LIMITS.performance) {
-            return createRoom('performance');
+            const newRoom = createRoom('performance');
+            // seed 9 normal bots + this agent will be 10th
+            seedNormalBots(newRoom, 9);
+            return newRoom;
         }
 
-        // all full, no kickable normal
+        // all full: allow 0.02e agents to kick old 0.01e agent in waitingRoom
+        if (botPrice >= 0.02) {
+            for (const room of performanceRooms) {
+                const victim = room.findKickableOldAgent();
+                if (victim) {
+                    delete room.waitingRoom[victim];
+                    return room;
+                }
+            }
+        }
+
         return null;
     }
 
@@ -782,6 +841,7 @@ wss.on('connection', (ws, req) => {
                 if (botMeta) {
                     data.name = botMeta.name;
                     data.botType = botMeta.botType;
+                    data.botPrice = botMeta.price || 0;
                 }
 
                 if (arenaId && rooms.has(arenaId)) {
@@ -862,7 +922,7 @@ app.post('/api/bot/register', (req, res) => {
     saveBotRegistry();
 
     // auto-assign room on register (performance by default)
-    const room = assignRoomForJoin({ name: botRegistry[id].name, botType: botRegistry[id].botType, arenaType: 'performance' });
+    const room = assignRoomForJoin({ name: botRegistry[id].name, botType: botRegistry[id].botType, botPrice: botRegistry[id].price || 0, arenaType: 'performance' });
     const payload = { ...botRegistry[id] };
     if (room) {
         payload.arenaId = room.id;
@@ -920,7 +980,7 @@ app.post('/api/arena/join', (req, res) => {
         if (bot.credits <= 0) return res.status(402).json({ error: 'topup_required' });
     }
 
-    const room = assignRoomForJoin({ name: bot.name, botType: bot.botType, arenaType: arenaType || 'performance' });
+    const room = assignRoomForJoin({ name: bot.name, botType: bot.botType, botPrice: bot.price || 0, arenaType: arenaType || 'performance' });
     if (!room) return res.status(409).json({ error: 'full_or_payment_required' });
 
     res.json({
