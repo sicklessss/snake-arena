@@ -560,10 +560,26 @@ class GameRoom {
     startCountdown() {
         this.gameState = 'COUNTDOWN';
         this.timerSeconds = 15;
-        this.players = {};
         this.food = [];
         this.spawnIndex = 0;
-        this.waitingRoom = {};
+
+        // Preserve queued bots and re-queue current players for next match
+        const preserved = this.waitingRoom || {};
+        Object.values(this.players).forEach((p) => {
+            if (p.kicked) return;
+            preserved[p.id] = {
+                id: p.id,
+                name: p.name,
+                color: p.color,
+                ws: p.ws,
+                botType: p.botType,
+                botId: p.botId || null,
+                botPrice: 0,
+            };
+        });
+        this.waitingRoom = preserved;
+
+        this.players = {};
         this.currentMatchId = nextMatchId();
         this.victoryPauseTimer = 0;
         this.lastSurvivorForVictory = null;
@@ -690,7 +706,7 @@ class GameRoom {
             }
         }
 
-        if (this.gameState !== 'COUNTDOWN') return { ok: false, reason: 'game_in_progress' };
+        const gameInProgress = this.gameState !== 'COUNTDOWN';
 
         if (Object.keys(this.waitingRoom).length >= this.maxPlayers) {
             if (this.type === 'performance' && botType === 'agent') {
@@ -791,10 +807,24 @@ function countAgentsInRoom(room) {
 
 function kickRandomNormal(room) {
     const normals = Object.keys(room.waitingRoom).filter((id) => room.waitingRoom[id].botType === 'normal');
-    if (normals.length === 0) return null;
-    const victimId = normals[Math.floor(Math.random() * normals.length)];
-    delete room.waitingRoom[victimId];
-    return victimId;
+    if (normals.length > 0) {
+        const victimId = normals[Math.floor(Math.random() * normals.length)];
+        delete room.waitingRoom[victimId];
+        return victimId;
+    }
+
+    const liveNormals = Object.keys(room.players).filter((id) => room.players[id].botType === 'normal');
+    if (liveNormals.length > 0) {
+        const victimId = liveNormals[Math.floor(Math.random() * liveNormals.length)];
+        const victim = room.players[victimId];
+        if (victim) {
+            victim.kicked = true;
+            room.killPlayer(victim, 'kicked');
+            return victimId;
+        }
+    }
+
+    return null;
 }
 
 function prepareRoomForAgentUpload(botId) {
