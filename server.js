@@ -658,8 +658,9 @@ class GameRoom {
     }
 
     findKickableNormal() {
-        const ids = Object.keys(this.waitingRoom);
-        const victimId = ids.find((id) => this.waitingRoom[id].botType === 'normal');
+        const ids = Object.keys(this.waitingRoom).filter((id) => this.waitingRoom[id].botType === 'normal');
+        if (ids.length === 0) return null;
+        const victimId = ids[Math.floor(Math.random() * ids.length)];
         return victimId || null;
     }
 
@@ -747,8 +748,13 @@ function createRoom(type) {
     const id = `${type}-${index}`;
     const room = new GameRoom({ id, type });
     rooms.set(id, room);
-    if (type === 'performance') performanceRooms.push(room);
-    else competitiveRooms.push(room);
+    if (type === 'performance') {
+        performanceRooms.push(room);
+        // Default: fill with normal bots
+        seedNormalBots(room, ROOM_MAX_PLAYERS.performance);
+    } else {
+        competitiveRooms.push(room);
+    }
     return room;
 }
 
@@ -757,7 +763,7 @@ createRoom('performance');
 createRoom('competitive');
 createRoom('competitive');
 
-function seedNormalBots(room, count = 9) {
+function seedNormalBots(room, count = 10) {
     for (let i = 0; i < count; i++) {
         const id = 'normal_' + Math.random().toString(36).slice(2, 7);
         room.waitingRoom[id] = {
@@ -772,10 +778,53 @@ function seedNormalBots(room, count = 9) {
     }
 }
 
+function countAgentsInRoom(room) {
+    let count = 0;
+    Object.values(room.waitingRoom).forEach((w) => {
+        if (w.botType === 'agent') count++;
+    });
+    Object.values(room.players).forEach((p) => {
+        if (p.botType === 'agent') count++;
+    });
+    return count;
+}
+
+function kickRandomNormal(room) {
+    const normals = Object.keys(room.waitingRoom).filter((id) => room.waitingRoom[id].botType === 'normal');
+    if (normals.length === 0) return null;
+    const victimId = normals[Math.floor(Math.random() * normals.length)];
+    delete room.waitingRoom[victimId];
+    return victimId;
+}
+
+function prepareRoomForAgentUpload(botId) {
+    let targetRoom = null;
+    for (const room of performanceRooms) {
+        if (countAgentsInRoom(room) < room.maxPlayers) {
+            targetRoom = room;
+            break;
+        }
+    }
+
+    if (!targetRoom && performanceRooms.length < ROOM_LIMITS.performance) {
+        targetRoom = createRoom('performance');
+    }
+
+    if (!targetRoom) return null;
+
+    if (Object.keys(targetRoom.waitingRoom).length === 0) {
+        seedNormalBots(targetRoom, targetRoom.maxPlayers);
+    }
+
+    kickRandomNormal(targetRoom);
+    botRegistry[botId].preferredArenaId = targetRoom.id;
+    saveBotRegistry();
+    return targetRoom;
+}
+
 function assignRoomForJoin(data) {
     const botType = data.botType || (data.name && data.name.includes('HERO') ? 'hero' : 'normal');
     const arenaType = data.arenaType || 'performance';
-    const botPrice = data.botPrice || 0;
 
     if (arenaType === 'competitive') {
         return competitiveRooms[0];
@@ -783,29 +832,21 @@ function assignRoomForJoin(data) {
 
     // performance
     if (botType === 'agent') {
-        // try room with space or kickable normal
-        for (const room of performanceRooms) {
-            if (room.hasSpace()) return room;
-            if (room.findKickableNormal()) return room;
+        // Prefer a pre-assigned arena if present
+        if (data.botId && botRegistry[data.botId] && botRegistry[data.botId].preferredArenaId) {
+            const pref = botRegistry[data.botId].preferredArenaId;
+            if (rooms.has(pref)) return rooms.get(pref);
         }
 
-        // create new performance room if allowed
+        // Fill rooms in order: keep replacing normals until a room has 10 agents
+        for (const room of performanceRooms) {
+            if (countAgentsInRoom(room) < room.maxPlayers) return room;
+        }
+
+        // Create new performance room if allowed
         if (performanceRooms.length < ROOM_LIMITS.performance) {
             const newRoom = createRoom('performance');
-            // seed 9 normal bots + this agent will be 10th
-            seedNormalBots(newRoom, 9);
             return newRoom;
-        }
-
-        // all full: allow 0.02e agents to kick old 0.01e agent in waitingRoom
-        if (botPrice >= 0.02) {
-            for (const room of performanceRooms) {
-                const victim = room.findKickableOldAgent();
-                if (victim) {
-                    delete room.waitingRoom[victim];
-                    return room;
-                }
-            }
         }
 
         return null;
@@ -1050,6 +1091,11 @@ app.post('/api/bot/upload', async (req, res) => {
         
         botRegistry[targetBotId].scriptPath = scriptPath;
         saveBotRegistry();
+
+        // Auto-assign/kick rule: each uploaded agent bot kicks one normal bot
+        if ((botRegistry[targetBotId].botType || 'agent') === 'agent') {
+            prepareRoomForAgentUpload(targetBotId);
+        }
 
         // 4. Restart if running
         if (activeWorkers.has(targetBotId)) {
