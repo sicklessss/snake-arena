@@ -175,10 +175,26 @@ function GameCanvas({ setMatchId, setPlayers }: { setMatchId: (id: number | null
   const [timer, setTimer] = useState('3:00');
   const [timerColor, setTimerColor] = useState('#ff8800');
   const [matchInfo, setMatchInfo] = useState('ARENA: --');
+  const [selectedRoom, setSelectedRoom] = useState(1);
+  const [roomCount, setRoomCount] = useState(1);
+
+  // Fetch room count periodically
+  useEffect(() => {
+    const fetchRooms = async () => {
+      try {
+        const res = await fetch('/api/arena/status');
+        const data = await res.json();
+        setRoomCount(data.performance?.length || 1);
+      } catch {}
+    };
+    fetchRooms();
+    const t = setInterval(fetchRooms, 5000);
+    return () => clearInterval(t);
+  }, []);
 
   useEffect(() => {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const wsUrl = `${proto}://${window.location.host}?arenaId=performance-1`; 
+    const wsUrl = `${proto}://${window.location.host}?arenaId=performance-${selectedRoom}`; 
     
     let ws: WebSocket;
     
@@ -308,11 +324,22 @@ function GameCanvas({ setMatchId, setPlayers }: { setMatchId: (id: number | null
     };
 
     return () => { if (ws) ws.close(); };
-  }, [setMatchId, setPlayers]);
+  }, [setMatchId, setPlayers, selectedRoom]);
 
   return (
     <div className="main-stage">
-        <h1>🦀 SNAKE ARENA</h1>
+        <h1>🦀 SNAKE ARENA {selectedRoom}
+          <span className="room-selector">
+            {[1,2,3,4,5,6].map(n => (
+              <button 
+                key={n} 
+                className={`room-btn ${selectedRoom === n ? 'active' : ''} ${n > roomCount ? 'disabled' : ''}`}
+                onClick={() => n <= roomCount && setSelectedRoom(n)}
+                disabled={n > roomCount}
+              >{n}</button>
+            ))}
+          </span>
+        </h1>
         <div className="match-info">{matchInfo}</div>
         <div className="timer" style={{ color: timerColor }}>{timer}</div>
         <div className="canvas-wrap">
