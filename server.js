@@ -42,6 +42,50 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
+// --- Security Config ---
+const ADMIN_KEY = process.env.ADMIN_KEY || null;
+const BOT_UPLOAD_KEY = process.env.BOT_UPLOAD_KEY || ADMIN_KEY;
+const MAX_NAME_LEN = 32;
+const MAX_BOT_ID_LEN = 32;
+
+function getClientIp(req) {
+    const xf = req.headers['x-forwarded-for'];
+    if (xf) return xf.split(',')[0].trim();
+    return req.socket.remoteAddress || 'unknown';
+}
+
+function rateLimit({ windowMs, max }) {
+    const store = new Map();
+    return (req, res, next) => {
+        const ip = getClientIp(req);
+        const now = Date.now();
+        let entry = store.get(ip) || { count: 0, reset: now + windowMs };
+        if (now > entry.reset) {
+            entry = { count: 0, reset: now + windowMs };
+        }
+        entry.count += 1;
+        store.set(ip, entry);
+        if (entry.count > max) {
+            return res.status(429).json({ error: 'rate_limited' });
+        }
+        next();
+    };
+}
+
+function requireAdminKey(req, res, next) {
+    if (!ADMIN_KEY) return next();
+    const key = req.header('x-api-key');
+    if (!key || key !== ADMIN_KEY) return res.status(401).json({ error: 'unauthorized' });
+    next();
+}
+
+function requireUploadKey(req, res, next) {
+    if (!BOT_UPLOAD_KEY) return next();
+    const key = req.header('x-api-key');
+    if (!key || key !== BOT_UPLOAD_KEY) return res.status(401).json({ error: 'unauthorized' });
+    next();
+}
+
 app.use((req, res, next) => {
     res.header('Cache-Control', 'private, no-cache, no-store, must-revalidate');
     res.header('Expires', '-1');
@@ -50,7 +94,10 @@ app.use((req, res, next) => {
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
-app.use(bodyParser.json());
+app.use(bodyParser.json({ limit: '200kb' }));
+
+// API rate limiting
+app.use('/api', rateLimit({ windowMs: 60_000, max: 120 }));
 
 // --- Global History ---
 const HISTORY_FILE = 'history.json';
@@ -148,7 +195,7 @@ function startBotWorker(botId) {
     // Static Scan (Check before run)
     try {
         const content = fs.readFileSync(bot.scriptPath, 'utf8');
-        const forbidden = ['require', 'import', 'process', 'fs', 'net', 'http', 'https', 'child_process', 'eval'];
+        const forbidden = ['require', 'import', 'process', 'fs', 'net', 'http', 'https', 'child_process', 'eval', 'Function', 'constructor', 'global', 'Buffer'];
         const found = forbidden.filter(k => content.includes(k));
         // Simple string check is prone to false positives (e.g. inside comments), but requested by prompt.
         // We will do a robust regex scan for word boundaries to avoid banning "processData".
@@ -163,12 +210,13 @@ function startBotWorker(botId) {
         return;
     }
 
-    console.log(`[Worker] Starting bot ${botId}`);
+    const arenaId = bot.preferredArenaId || 'performance-1';
+    console.log(`[Worker] Starting bot ${botId} for arena ${arenaId}`);
     const worker = new Worker(path.join(__dirname, 'sandbox-worker.js'), {
         workerData: {
             scriptPath: bot.scriptPath,
             botId: botId,
-            serverUrl: `ws://localhost:${PORT}` // Local loopback for bots
+            serverUrl: `ws://localhost:${PORT}?arenaId=${arenaId}` // Local loopback for bots
         }
     });
 
@@ -209,9 +257,9 @@ function loadBotRegistry() {
 }
 
 // Add text parser for upload
-app.use(bodyParser.text({ type: 'text/javascript' }));
-app.use(bodyParser.text({ type: 'application/javascript' }));
-app.use(bodyParser.text({ type: 'text/plain' }));
+app.use(bodyParser.text({ type: 'text/javascript', limit: '200kb' }));
+app.use(bodyParser.text({ type: 'application/javascript', limit: '200kb' }));
+app.use(bodyParser.text({ type: 'text/plain', limit: '200kb' }));
 
 function saveBotRegistry() {
     try {
@@ -579,6 +627,25 @@ class GameRoom {
         });
         this.waitingRoom = preserved;
 
+        // Enforce maxPlayers cap on next match
+        const allIds = Object.keys(this.waitingRoom);
+        if (allIds.length > this.maxPlayers) {
+            // Remove normals first, then random until within cap
+            let overflow = allIds.length - this.maxPlayers;
+            const normals = allIds.filter(id => this.waitingRoom[id].botType === 'normal');
+            while (overflow > 0 && normals.length > 0) {
+                const victimId = normals.pop();
+                delete this.waitingRoom[victimId];
+                overflow--;
+            }
+            const remaining = Object.keys(this.waitingRoom);
+            while (overflow > 0 && remaining.length > 0) {
+                const victimId = remaining.pop();
+                delete this.waitingRoom[victimId];
+                overflow--;
+            }
+        }
+
         this.players = {};
         this.currentMatchId = nextMatchId();
         this.victoryPauseTimer = 0;
@@ -673,6 +740,12 @@ class GameRoom {
         return Object.keys(this.waitingRoom).length < this.maxPlayers;
     }
 
+    capacityRemaining() {
+        const playing = Object.keys(this.players).length;
+        const waiting = Object.keys(this.waitingRoom).length;
+        return this.maxPlayers - playing - waiting;
+    }
+
     findKickableNormal() {
         const ids = Object.keys(this.waitingRoom).filter((id) => this.waitingRoom[id].botType === 'normal');
         if (ids.length === 0) return null;
@@ -688,8 +761,11 @@ class GameRoom {
     }
 
     handleJoin(data, ws) {
-        let name = data.name || 'Bot';
+        let name = (data.name || 'Bot').toString().slice(0, MAX_NAME_LEN);
         const isHero = name && name.includes('HERO');
+        if (data.botId && String(data.botId).length > MAX_BOT_ID_LEN) {
+            return { ok: false, reason: 'invalid_bot_id' };
+        }
         let botType = data.botType || (isHero ? 'hero' : 'normal');
         const botMeta = data.botId && botRegistry[data.botId] ? botRegistry[data.botId] : null;
         if (botMeta) {
@@ -708,15 +784,20 @@ class GameRoom {
 
         const gameInProgress = this.gameState !== 'COUNTDOWN';
 
-        if (Object.keys(this.waitingRoom).length >= this.maxPlayers) {
-            if (this.type === 'performance' && botType === 'agent') {
+        // Check capacity - but allow agent/hero to queue during match (overflow handled at startCountdown)
+        if (this.capacityRemaining() <= 0) {
+            if (gameInProgress && (botType === 'agent' || isHero)) {
+                // Allow agent/hero to queue even if over capacity during match
+                // startCountdown() will trim normals before next match
+                console.log(`[Join] Allowing ${botType} "${name}" to queue during match (will trim normals later)`);
+            } else if (this.type === 'performance' && botType === 'agent') {
                 const victim = this.findKickableNormal();
                 if (victim) delete this.waitingRoom[victim];
-                else return { ok: false, reason: 'full' };
+                if (this.capacityRemaining() <= 0) return { ok: false, reason: 'full' };
             } else if (isHero) {
                 const victim = Object.keys(this.waitingRoom).find((id) => this.waitingRoom[id].botType !== 'hero');
                 if (victim) delete this.waitingRoom[victim];
-                else return { ok: false, reason: 'full' };
+                if (this.capacityRemaining() <= 0) return { ok: false, reason: 'full' };
             } else {
                 return { ok: false, reason: 'full' };
             }
@@ -890,6 +971,8 @@ function assignRoomForJoin(data) {
 wss.on('connection', (ws, req) => {
     let playerId = null;
     let room = null;
+    let msgCount = 0;
+    let msgWindow = Date.now();
 
     // auto-attach spectators by arenaId
     try {
@@ -903,9 +986,20 @@ wss.on('connection', (ws, req) => {
 
     ws.on('message', (msg) => {
         try {
+            const now = Date.now();
+            if (now - msgWindow > 1000) {
+                msgWindow = now;
+                msgCount = 0;
+            }
+            msgCount++;
+            if (msgCount > 20) {
+                // Too chatty, drop message
+                return;
+            }
             const data = JSON.parse(msg);
 
             if (data.type === 'join') {
+                console.log(`[WS] Join request from ${data.name || 'unknown'} (botId: ${data.botId || 'none'})`);
                 const url = new URL(req.url, `http://${req.headers.host}`);
                 const arenaId = url.searchParams.get('arenaId');
                 const botMeta = data.botId && botRegistry[data.botId] ? botRegistry[data.botId] : null;
@@ -922,12 +1016,14 @@ wss.on('connection', (ws, req) => {
                 }
 
                 if (!room) {
+                    console.log(`[WS] Join rejected: no room available`);
                     ws.send(JSON.stringify({ type: 'queued', id: null, reason: 'payment_required_or_full' }));
                     return;
                 }
 
                 room.clients.add(ws);
                 const res = room.handleJoin(data, ws);
+                console.log(`[WS] Join result for ${data.name}: ${JSON.stringify(res)}`);
                 if (res.ok) {
                     playerId = res.id;
                 } else {
@@ -978,14 +1074,16 @@ function leaderboardFromHistory(filterArenaId = null) {
         .sort((a,b)=>b.wins-a.wins);
 }
 
-app.post('/api/bot/register', (req, res) => {
+app.post('/api/bot/register', requireUploadKey, (req, res) => {
     const { name, price, owner, botType } = req.body || {};
+    const safeName = (name || 'AgentBot').toString().slice(0, MAX_NAME_LEN);
+    const safePrice = Number(price || 0);
     const id = createBotId();
     botRegistry[id] = {
         id,
-        name: name || 'AgentBot',
-        owner: owner || 'unknown',
-        price: price || 0,
+        name: safeName,
+        owner: (owner || 'unknown').toString().slice(0, 64),
+        price: isNaN(safePrice) ? 0 : safePrice,
         botType: botType || 'agent',
         credits: 5,
         createdAt: Date.now()
@@ -1005,7 +1103,7 @@ app.post('/api/bot/register', (req, res) => {
     res.json(payload);
 });
 
-app.post('/api/bot/set-price', (req, res) => {
+app.post('/api/bot/set-price', requireAdminKey, (req, res) => {
     const { botId, newPrice } = req.body || {};
     if (!botRegistry[botId]) return res.status(404).json({ error: 'bot_not_found' });
     botRegistry[botId].price = newPrice;
@@ -1019,7 +1117,7 @@ app.get('/api/bot/:botId', (req, res) => {
     res.json(bot);
 });
 
-app.post('/api/bot/topup', (req, res) => {
+app.post('/api/bot/topup', requireAdminKey, (req, res) => {
     const { botId, amount } = req.body || {};
     const bot = botRegistry[botId];
     if (!bot) return res.status(404).json({ error: 'bot_not_found' });
@@ -1060,7 +1158,7 @@ app.post('/api/arena/join', (req, res) => {
     });
 });
 
-app.post('/api/arena/kick', (req, res) => {
+app.post('/api/arena/kick', requireAdminKey, (req, res) => {
     const { arenaId, targetBotId } = req.body || {};
     const room = rooms.get(arenaId);
     if (!room) return res.status(404).json({ error: 'arena_not_found' });
@@ -1079,7 +1177,7 @@ app.get('/api/leaderboard/arena/:arenaId', (req, res) => {
 });
 
 // --- Bot Upload & Sandbox API ---
-app.post('/api/bot/upload', async (req, res) => {
+app.post('/api/bot/upload', requireUploadKey, rateLimit({ windowMs: 60_000, max: 12 }), async (req, res) => {
     try {
         const { botId } = req.query;
         let scriptContent = req.body;
@@ -1088,9 +1186,12 @@ app.post('/api/bot/upload', async (req, res) => {
         if (!scriptContent || typeof scriptContent !== 'string') {
             return res.status(400).json({ error: 'invalid_script_content', message: 'Send script as text/javascript body' });
         }
+        if (scriptContent.length > 200_000) {
+            return res.status(413).json({ error: 'payload_too_large' });
+        }
 
         // 1. Static Scan
-        const forbidden = ['require', 'import', 'process', 'fs', 'net', 'http', 'https', 'child_process', 'eval'];
+        const forbidden = ['require', 'import', 'process', 'fs', 'net', 'http', 'https', 'child_process', 'eval', 'Function', 'constructor', 'global', 'Buffer'];
         // Use a regex to check for word boundaries to avoid false positives on variable names like "processData"
         // But block properties like "process.env"
         // Simple heuristic: if it matches \bkeyword\b it is risky.
@@ -1139,7 +1240,7 @@ app.post('/api/bot/upload', async (req, res) => {
     }
 });
 
-app.post('/api/bot/start', (req, res) => {
+app.post('/api/bot/start', requireAdminKey, (req, res) => {
     const { botId } = req.body;
     if (!botRegistry[botId]) return res.status(404).json({ error: 'bot_not_found' });
     
@@ -1151,7 +1252,7 @@ app.post('/api/bot/start', (req, res) => {
     res.json({ ok: true, message: 'Bot started' });
 });
 
-app.post('/api/bot/stop', (req, res) => {
+app.post('/api/bot/stop', requireAdminKey, (req, res) => {
     const { botId } = req.body;
     if (!botRegistry[botId]) return res.status(404).json({ error: 'bot_not_found' });
     
