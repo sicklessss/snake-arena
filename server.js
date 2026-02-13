@@ -645,6 +645,7 @@ class GameRoom {
                 botType: p.botType,
                 botId: p.botId || null,
                 botPrice: 0,
+                entryPrice: p.entryPrice || 0,
             };
         });
         this.waitingRoom = preserved;
@@ -693,6 +694,7 @@ class GameRoom {
                 ws: w.ws,
                 botType: w.botType,
                 botId: w.botId || null,
+                entryPrice: w.entryPrice || 0,
             };
             if (w.ws && w.ws.readyState === 1) {
                 w.ws.send(JSON.stringify({ type: 'init', id: id, botId: w.botId || null, gridSize: CONFIG.gridSize }));
@@ -825,6 +827,9 @@ class GameRoom {
             }
         }
 
+        // Record entry price for agent/hero
+        const entryPrice = (botType === 'agent' || botType === 'hero') ? currentEntryFee : 0;
+
         const id = Math.random().toString(36).substr(2, 5);
         this.waitingRoom[id] = {
             id: id,
@@ -834,8 +839,13 @@ class GameRoom {
             botType,
             botId: data.botId || null,
             botPrice: data.botPrice || 0,
+            entryPrice: entryPrice,
         };
-        ws.send(JSON.stringify({ type: 'queued', id: id, botId: data.botId || null }));
+        ws.send(JSON.stringify({ type: 'queued', id: id, botId: data.botId || null, entryPrice }));
+        
+        // Check if we should increase entry fee
+        checkAndIncreaseFee();
+        
         return { ok: true, id };
     }
 
@@ -917,21 +927,82 @@ function countTotalAgents() {
     return total;
 }
 
-// Check if all 6 rooms are full of agents/heroes
-function allRoomsFull() {
-    if (performanceRooms.length < ROOM_LIMITS.performance) return false;
-    for (const room of performanceRooms) {
-        if (countAgentsInRoom(room) < room.maxPlayers) return false;
+// --- Entry Fee System ---
+// Entry fee starts at 0.01 ETH, increases by 0.01 each time all 60 slots are filled
+let currentEntryFee = 0.01;
+const ENTRY_FEE_FILE = path.join(__dirname, 'data', 'entry-fee.json');
+
+function loadEntryFee() {
+    try {
+        if (fs.existsSync(ENTRY_FEE_FILE)) {
+            const data = JSON.parse(fs.readFileSync(ENTRY_FEE_FILE));
+            currentEntryFee = data.currentEntryFee || 0.01;
+        }
+    } catch (e) {
+        currentEntryFee = 0.01;
     }
-    return true;
 }
 
-// Calculate entry fee when all rooms are full
-// First overflow: 0.02 ETH, then +0.01 ETH each time
-let overflowCount = 0;
+function saveEntryFee() {
+    try {
+        const dir = path.dirname(ENTRY_FEE_FILE);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(ENTRY_FEE_FILE, JSON.stringify({ currentEntryFee }, null, 2));
+    } catch (e) {}
+}
+
+loadEntryFee();
+
+// Count agents who paid >= currentEntryFee
+function countCurrentPriceAgents() {
+    let count = 0;
+    for (const room of performanceRooms) {
+        Object.values(room.waitingRoom).forEach((w) => {
+            if ((w.botType === 'agent' || w.botType === 'hero') && (w.entryPrice || 0) >= currentEntryFee) count++;
+        });
+        Object.values(room.players).forEach((p) => {
+            if ((p.botType === 'agent' || p.botType === 'hero') && (p.entryPrice || 0) >= currentEntryFee) count++;
+        });
+    }
+    return count;
+}
+
+// Check if all 60 slots are filled with current-price agents
+function allSlotsFilled() {
+    const maxSlots = ROOM_LIMITS.performance * 10; // 60
+    return countCurrentPriceAgents() >= maxSlots;
+}
+
+// Check and increase entry fee if all slots filled
+function checkAndIncreaseFee() {
+    if (allSlotsFilled()) {
+        currentEntryFee = Math.round((currentEntryFee + 0.01) * 100) / 100;
+        console.log(`[EntryFee] All slots filled! New entry fee: ${currentEntryFee} ETH`);
+        saveEntryFee();
+    }
+}
+
+// Find a kickable agent (paid less than current fee)
+function findKickableAgent() {
+    for (const room of performanceRooms) {
+        // Check waitingRoom first
+        for (const [id, w] of Object.entries(room.waitingRoom)) {
+            if ((w.botType === 'agent' || w.botType === 'hero') && (w.entryPrice || 0) < currentEntryFee) {
+                return { room, id, inWaiting: true };
+            }
+        }
+        // Check players
+        for (const [id, p] of Object.entries(room.players)) {
+            if ((p.botType === 'agent' || p.botType === 'hero') && (p.entryPrice || 0) < currentEntryFee) {
+                return { room, id, inWaiting: false };
+            }
+        }
+    }
+    return null;
+}
+
 function getEntryFee() {
-    if (!allRoomsFull()) return 0;
-    return 0.02 + (overflowCount * 0.01);
+    return currentEntryFee;
 }
 
 function kickRandomNormal(room) {
@@ -1014,8 +1085,26 @@ function assignRoomForJoin(data) {
             return newRoom;
         }
 
-        // All 6 rooms full - need payment to kick someone
-        // For now, return null (payment handled separately)
+        // All 6 rooms full - try to find a kickable agent (paid less than current fee)
+        const kickable = findKickableAgent();
+        if (kickable) {
+            const { room, id, inWaiting } = kickable;
+            if (inWaiting) {
+                console.log(`[Kick] Kicking ${room.waitingRoom[id].name} (paid ${room.waitingRoom[id].entryPrice || 0} ETH) from waiting room`);
+                if (room.waitingRoom[id].ws) {
+                    room.waitingRoom[id].ws.send(JSON.stringify({ type: 'kicked', reason: 'outbid' }));
+                }
+                delete room.waitingRoom[id];
+            } else {
+                console.log(`[Kick] Kicking ${room.players[id].name} (paid ${room.players[id].entryPrice || 0} ETH) from game`);
+                room.players[id].kicked = true;
+                room.killPlayer(room.players[id], 'kicked');
+            }
+            return room;
+        }
+
+        // No kickable agent found - truly full at current price
+        console.log(`[Join] All 60 slots filled at ${currentEntryFee} ETH, no lower-price agents to kick`);
         return null;
     }
 
@@ -1202,9 +1291,10 @@ app.get('/api/arena/status', (req, res) => {
         })),
         competitive: competitiveRooms.map(getRoomStatus),
         totalAgents: countTotalAgents(),
+        currentPriceAgents: countCurrentPriceAgents(),
         maxCapacity: ROOM_LIMITS.performance * 10,
-        allFull: allRoomsFull(),
-        entryFee: getEntryFee()
+        entryFee: getEntryFee(),
+        allSlotsFilled: allSlotsFilled()
     });
 });
 
