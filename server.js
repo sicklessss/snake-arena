@@ -172,7 +172,7 @@ function checkWorkerLoad() {
     }
 }
 
-function stopBotWorker(botId) {
+function stopBotWorker(botId, markStopped = true) {
     if (activeWorkers.has(botId)) {
         console.log(`[Worker] Stopping bot ${botId}`);
         const worker = activeWorkers.get(botId);
@@ -180,11 +180,16 @@ function stopBotWorker(botId) {
         activeWorkers.delete(botId);
         checkWorkerLoad();
     }
+    // Mark as not running (unless called during restart)
+    if (markStopped && botRegistry[botId]) {
+        botRegistry[botId].running = false;
+        saveBotRegistry();
+    }
 }
 
 function startBotWorker(botId) {
-    // Stop existing if any
-    stopBotWorker(botId);
+    // Stop existing if any (don't mark as stopped since we're restarting)
+    stopBotWorker(botId, false);
 
     const bot = botRegistry[botId];
     if (!bot || !bot.scriptPath) {
@@ -238,6 +243,10 @@ function startBotWorker(botId) {
 
     activeWorkers.set(botId, worker);
     checkWorkerLoad();
+    
+    // Mark as running
+    bot.running = true;
+    saveBotRegistry();
 }
 
 // --- Bot Registry (MVP, local JSON) ---
@@ -248,11 +257,24 @@ function loadBotRegistry() {
     try {
         if (fs.existsSync(BOT_DB_FILE)) {
             botRegistry = JSON.parse(fs.readFileSync(BOT_DB_FILE));
-            // Resume bots on server restart?
-            // For MVP, we don't auto-restart, but we could.
         }
     } catch (e) {
         botRegistry = {};
+    }
+}
+
+// Auto-restart bots that were running before server restart
+function resumeRunningBots() {
+    const runningBots = Object.keys(botRegistry).filter(id => botRegistry[id].running);
+    if (runningBots.length > 0) {
+        console.log(`[Resume] Restarting ${runningBots.length} bots that were running...`);
+        runningBots.forEach((botId, i) => {
+            // Stagger restarts to avoid overwhelming the server
+            setTimeout(() => {
+                console.log(`[Resume] Restarting bot ${botId}`);
+                startBotWorker(botId);
+            }, i * 500);
+        });
     }
 }
 
@@ -1361,4 +1383,8 @@ app.post('/api/bet/claim', (req, res) => {
 app.get('/history', (req, res) => res.json(matchHistory));
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Running on ${PORT}`));
+server.listen(PORT, () => {
+    console.log(`Running on ${PORT}`);
+    // Resume bots after a short delay (let rooms initialize)
+    setTimeout(resumeRunningBots, 3000);
+});
