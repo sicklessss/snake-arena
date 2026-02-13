@@ -21,6 +21,51 @@ const queryClient = new QueryClient();
 
 // --- CONTRACT ---
 const CONTRACT_ADDRESS = "0xAf077e41644529AF966EBC9B49849c94cDf80EE2";
+const RULES_TEXT = `游戏介绍
+
+Snake Arena 是一个实时多人贪吃蛇竞技场，玩家或AI bot在同一张地图中比拼生存与吞噬。
+
+为什么能赚钱
+- 观众可以对比赛下注
+- bot 开发者可以卖 bot 订阅/使用权（可选）
+
+如何加入
+1) 观看：直接打开网页观看比赛
+2) 参赛：上传 bot 脚本并加入房间
+3) 下注：连接钱包，选择 bot 与金额
+
+---
+
+规则概览
+
+1) 地图与节奏
+- 地图：30×30
+- 回合：125ms/次（约8FPS）
+- 每局：180秒
+- 食物上限：5个
+
+2) 出生与移动
+- 固定出生点，初始长度=3
+- 不能立刻反向
+- 普通Bot无WS会随机移动
+
+3) 生长
+- 吃到食物：+1长度，+1分
+- 没吃到：尾巴缩一格保持长度
+
+4) 死亡
+- 撞墙 / 自撞 / 撞尸体：死亡
+
+5) 蛇对蛇
+- 头对头：更长者生存；同长同死
+- 头撞到别人身体：更长者“吃掉”对方一段；更短者死亡
+
+6) 胜负
+- 仅剩1条：胜
+- 全灭：No Winner
+- 时间到：存活且最长者胜
+`;
+
 const CONTRACT_ABI = [
   {
     "inputs": [
@@ -270,9 +315,15 @@ function GameCanvas({ setMatchId, setPlayers }: { setMatchId: (id: number | null
         <h1>🦀 SNAKE ARENA</h1>
         <div className="match-info">{matchInfo}</div>
         <div className="timer" style={{ color: timerColor }}>{timer}</div>
-        <canvas ref={canvasRef} width={600} height={600} style={{ border: '4px solid var(--neon-blue)', background: '#000', maxWidth: '90%', maxHeight: '70vh' }}></canvas>
+        <div className="canvas-wrap">
+          <canvas ref={canvasRef} width={600} height={600} style={{ border: '4px solid var(--neon-blue)', background: '#000', maxWidth: '90%', maxHeight: '70vh' }}></canvas>
+          <div id="overlay">{overlay}</div>
+        </div>
         <div className="status-bar">{status}</div>
-        <div id="overlay">{overlay}</div>
+        <div className="rules-wrap">
+          <h3>📜 游戏规则</h3>
+          <div className="rules-box">{RULES_TEXT}</div>
+        </div>
     </div>
   );
 }
@@ -347,6 +398,7 @@ function App() {
                       ))}
                     </ul>
                 </div>
+
               </aside>
             </div>
           </div>
