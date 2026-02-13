@@ -878,12 +878,38 @@ function seedNormalBots(room, count = 10) {
 function countAgentsInRoom(room) {
     let count = 0;
     Object.values(room.waitingRoom).forEach((w) => {
-        if (w.botType === 'agent') count++;
+        if (w.botType === 'agent' || w.botType === 'hero') count++;
     });
     Object.values(room.players).forEach((p) => {
-        if (p.botType === 'agent') count++;
+        if (p.botType === 'agent' || p.botType === 'hero') count++;
     });
     return count;
+}
+
+// Count total agents/heroes across all performance rooms
+function countTotalAgents() {
+    let total = 0;
+    for (const room of performanceRooms) {
+        total += countAgentsInRoom(room);
+    }
+    return total;
+}
+
+// Check if all 6 rooms are full of agents/heroes
+function allRoomsFull() {
+    if (performanceRooms.length < ROOM_LIMITS.performance) return false;
+    for (const room of performanceRooms) {
+        if (countAgentsInRoom(room) < room.maxPlayers) return false;
+    }
+    return true;
+}
+
+// Calculate entry fee when all rooms are full
+// First overflow: 0.02 ETH, then +0.01 ETH each time
+let overflowCount = 0;
+function getEntryFee() {
+    if (!allRoomsFull()) return 0;
+    return 0.02 + (overflowCount * 0.01);
 }
 
 function kickRandomNormal(room) {
@@ -941,29 +967,40 @@ function assignRoomForJoin(data) {
         return competitiveRooms[0];
     }
 
-    // performance
-    if (botType === 'agent') {
+    // performance - agent or hero
+    if (botType === 'agent' || botType === 'hero') {
         // Prefer a pre-assigned arena if present
         if (data.botId && botRegistry[data.botId] && botRegistry[data.botId].preferredArenaId) {
             const pref = botRegistry[data.botId].preferredArenaId;
-            if (rooms.has(pref)) return rooms.get(pref);
+            if (rooms.has(pref)) {
+                const prefRoom = rooms.get(pref);
+                // Only use preferred room if it still has capacity
+                if (countAgentsInRoom(prefRoom) < prefRoom.maxPlayers) {
+                    return prefRoom;
+                }
+            }
         }
 
-        // Fill rooms in order: keep replacing normals until a room has 10 agents
+        // Fill rooms in order: find first room with agent/hero capacity
         for (const room of performanceRooms) {
             if (countAgentsInRoom(room) < room.maxPlayers) return room;
         }
 
-        // Create new performance room if allowed
+        // Create new performance room if allowed (up to 6)
         if (performanceRooms.length < ROOM_LIMITS.performance) {
             const newRoom = createRoom('performance');
             return newRoom;
         }
 
+        // All 6 rooms full - need payment to kick someone
+        // For now, return null (payment handled separately)
         return null;
     }
 
-    // normal/hero
+    // normal - go to first room with any capacity
+    for (const room of performanceRooms) {
+        if (room.capacityRemaining() > 0) return room;
+    }
     return performanceRooms[0];
 }
 
@@ -1137,8 +1174,15 @@ app.get('/api/bot/:botId/credits', (req, res) => {
 
 app.get('/api/arena/status', (req, res) => {
     res.json({
-        performance: performanceRooms.map(getRoomStatus),
-        competitive: competitiveRooms.map(getRoomStatus)
+        performance: performanceRooms.map(r => ({
+            ...getRoomStatus(r),
+            agents: countAgentsInRoom(r)
+        })),
+        competitive: competitiveRooms.map(getRoomStatus),
+        totalAgents: countTotalAgents(),
+        maxCapacity: ROOM_LIMITS.performance * 10,
+        allFull: allRoomsFull(),
+        entryFee: getEntryFee()
     });
 });
 
