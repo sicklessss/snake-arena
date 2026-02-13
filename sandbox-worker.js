@@ -18,7 +18,8 @@ const userScriptContent = fs.readFileSync(scriptPath, 'utf8');
 // We block 'require' and other sensitive globals by shadowing them.
 // We provide 'WebSocket' and a 'CONFIG' object.
 
-const sandboxGlobals = {
+// Safe globals that can be passed as function params (no reserved words)
+const safeGlobals = {
     WebSocket: WebSocket,
     console: {
         log: (...args) => parentPort.postMessage({ type: 'log', message: args.join(' ') }),
@@ -32,7 +33,7 @@ const sandboxGlobals = {
     },
     // Block sensitive globals
     require: () => { throw new Error("Security Error: 'require' is blocked."); },
-    process: { env: {} }, // Minimal mock if needed, or block completely
+    process: { env: {} },
     module: {},
     exports: {},
     __dirname: null,
@@ -43,26 +44,48 @@ const sandboxGlobals = {
     http: null,
     https: null,
     child_process: null,
-    // Block eval-like
-    eval: () => { throw new Error("Security Error: 'eval' is blocked."); },
-    Function: () => { throw new Error("Security Error: 'Function' constructor is blocked."); }
 };
 
-// Execute the user script
+// Execute the user script using vm module for proper sandboxing
+const vm = require('vm');
+
 try {
-    // Wrap in a function that takes our sandboxed globals as arguments
-    const keys = Object.keys(sandboxGlobals);
-    const values = Object.values(sandboxGlobals);
+    // Create sandbox context with blocked dangerous globals
+    const sandbox = {
+        ...safeGlobals,
+        eval: () => { throw new Error("Security Error: 'eval' is blocked."); },
+        Function: () => { throw new Error("Security Error: 'Function' constructor is blocked."); },
+        setTimeout: setTimeout,
+        setInterval: setInterval,
+        clearTimeout: clearTimeout,
+        clearInterval: clearInterval,
+    };
     
-    // We add "use strict" to prevent global leakage via 'this'
-    const wrappedScript = `"use strict";\n${userScriptContent}`;
+    // Create context from sandbox
+    vm.createContext(sandbox);
     
-    const run = new Function(...keys, wrappedScript);
-    run(...values);
+    // Run the user script in the sandboxed context
+    vm.runInContext(userScriptContent, sandbox, {
+        filename: `bot_${botId}.js`,
+        timeout: 30000, // 30 second timeout for script initialization
+    });
     
     parentPort.postMessage({ type: 'status', status: 'running' });
+    
+    // Keep worker alive - the WebSocket connection in sandbox needs the event loop
+    setInterval(() => {}, 60000);
 
 } catch (err) {
-    parentPort.postMessage({ type: 'error', message: err.toString() });
+    parentPort.postMessage({ type: 'error', message: `Sandbox error: ${err.message}` });
     process.exit(1);
 }
+
+// Catch any uncaught exceptions in the worker
+process.on('uncaughtException', (err) => {
+    parentPort.postMessage({ type: 'error', message: `Uncaught exception: ${err.message}` });
+    process.exit(1);
+});
+
+process.on('unhandledRejection', (reason) => {
+    parentPort.postMessage({ type: 'error', message: `Unhandled rejection: ${reason}` });
+});

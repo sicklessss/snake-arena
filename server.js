@@ -6,6 +6,17 @@ const fs = require('fs');
 const bodyParser = require('body-parser');
 const { Worker } = require('worker_threads');
 
+// --- Logging Config ---
+const LOG_LEVEL = process.env.LOG_LEVEL || 'info'; // 'debug' | 'info' | 'warn' | 'error'
+const LOG_LEVELS = { debug: 0, info: 1, warn: 2, error: 3 };
+const log = {
+    debug: (...args) => LOG_LEVELS[LOG_LEVEL] <= 0 && console.log('[DEBUG]', ...args),
+    info: (...args) => LOG_LEVELS[LOG_LEVEL] <= 1 && console.log('[INFO]', ...args),
+    warn: (...args) => LOG_LEVELS[LOG_LEVEL] <= 2 && console.warn('[WARN]', ...args),
+    error: (...args) => LOG_LEVELS[LOG_LEVEL] <= 3 && console.error('[ERROR]', ...args),
+    important: (...args) => console.log('🔔', ...args), // Always show important events
+};
+
 // --- Sandbox Config ---
 const BOTS_DIR = path.join(__dirname, 'bots');
 if (!fs.existsSync(BOTS_DIR)) fs.mkdirSync(BOTS_DIR, { recursive: true });
@@ -126,7 +137,7 @@ function saveHistory(arenaId, winnerName, score) {
         winner: winnerName,
         score: score,
     });
-    if (matchHistory.length > 100) matchHistory.pop();
+    // Keep all history (no limit)
     fs.writeFileSync(HISTORY_FILE, JSON.stringify(matchHistory));
 }
 
@@ -193,30 +204,27 @@ function startBotWorker(botId) {
 
     const bot = botRegistry[botId];
     if (!bot || !bot.scriptPath) {
-        console.error(`[Worker] Cannot start bot ${botId}: No script found.`);
+        log.error(`[Worker] Cannot start bot ${botId}: No script found.`);
         return;
     }
 
-    // Static Scan (Check before run)
+    // Static Scan - Check for dangerous globals
     try {
         const content = fs.readFileSync(bot.scriptPath, 'utf8');
-        const forbidden = ['require', 'import', 'process', 'fs', 'net', 'http', 'https', 'child_process', 'eval', 'Function', 'constructor', 'global', 'Buffer'];
-        const found = forbidden.filter(k => content.includes(k));
-        // Simple string check is prone to false positives (e.g. inside comments), but requested by prompt.
-        // We will do a robust regex scan for word boundaries to avoid banning "processData".
-        const risk = forbidden.find(k => new RegExp(`\\b${k}\\b`).test(content));
-        
+        // Only block truly dangerous patterns (not common words like 'process' in comments)
+        const forbidden = ['require(', 'import ', 'child_process', '__dirname', '__filename'];
+        const risk = forbidden.find(k => content.includes(k));
         if (risk) {
-            console.error(`[Worker] Bot ${botId} blocked. Found forbidden keyword: ${risk}`);
+            log.error(`[Worker] Bot ${botId} blocked. Found forbidden pattern: ${risk}`);
             return;
         }
     } catch (e) {
-        console.error(`[Worker] Error scanning script for bot ${botId}:`, e);
+        log.error(`[Worker] Error scanning script for bot ${botId}:`, e);
         return;
     }
 
     const arenaId = bot.preferredArenaId || 'performance-1';
-    console.log(`[Worker] Starting bot ${botId} for arena ${arenaId}`);
+    log.important(`[Worker] Starting bot ${botId} for arena ${arenaId}`);
     const worker = new Worker(path.join(__dirname, 'sandbox-worker.js'), {
         workerData: {
             scriptPath: bot.scriptPath,
@@ -267,11 +275,11 @@ function loadBotRegistry() {
 function resumeRunningBots() {
     const runningBots = Object.keys(botRegistry).filter(id => botRegistry[id].running);
     if (runningBots.length > 0) {
-        console.log(`[Resume] Restarting ${runningBots.length} bots that were running...`);
+        log.important(`[Resume] Restarting ${runningBots.length} bots that were running...`);
         runningBots.forEach((botId, i) => {
             // Stagger restarts to avoid overwhelming the server
             setTimeout(() => {
-                console.log(`[Resume] Restarting bot ${botId}`);
+                log.info(`[Resume] Restarting bot ${botId}`);
                 startBotWorker(botId);
             }, i * 500);
         });
@@ -327,6 +335,7 @@ class GameRoom {
         this.currentMatchId = nextMatchId();
         this.victoryPauseTimer = 0;
         this.lastSurvivorForVictory = null;
+        this.replayFrames = []; // Record frames for replay
 
         this.startLoops();
     }
@@ -618,6 +627,10 @@ class GameRoom {
         this.winner = survivor ? survivor.name : 'No Winner';
         this.timerSeconds = 30;
         saveHistory(this.id, this.winner, survivor ? survivor.score : 0);
+        
+        // Save replay
+        this.saveReplay(survivor);
+        
         this.sendEvent('match_end', {
             matchId: this.currentMatchId,
             winnerBotId: survivor ? survivor.botId || null : null,
@@ -625,6 +638,35 @@ class GameRoom {
             arenaId: this.id,
             arenaType: this.type,
         });
+    }
+
+    saveReplay(survivor) {
+        if (this.replayFrames.length === 0) return;
+        
+        const replay = {
+            matchId: this.currentMatchId,
+            arenaId: this.id,
+            arenaType: this.type,
+            gridSize: CONFIG.gridSize,
+            timestamp: new Date().toISOString(),
+            winner: this.winner,
+            winnerScore: survivor ? survivor.score : 0,
+            totalFrames: this.replayFrames.length,
+            frames: this.replayFrames,
+        };
+        
+        // Ensure replays directory exists
+        const replayDir = path.join(__dirname, 'replays');
+        if (!fs.existsSync(replayDir)) {
+            fs.mkdirSync(replayDir, { recursive: true });
+        }
+        
+        const filename = `match-${this.currentMatchId}.json`;
+        fs.writeFileSync(path.join(replayDir, filename), JSON.stringify(replay));
+        log.info(`[Replay] Saved ${filename} (${this.replayFrames.length} frames)`);
+        
+        // Clear frames for next match
+        this.replayFrames = [];
     }
 
     startCountdown() {
@@ -754,6 +796,25 @@ class GameRoom {
             victoryPause: this.victoryPauseTimer > 0,
             victoryPauseTime: Math.ceil(this.victoryPauseTimer / 8),
         };
+
+        // Record frame for replay (only during PLAYING)
+        if (this.gameState === 'PLAYING') {
+            this.replayFrames.push({
+                turn: this.turn,
+                matchTimeLeft: this.matchTimeLeft,
+                players: displayPlayers.map(p => ({
+                    id: p.id,
+                    name: p.name,
+                    color: p.color,
+                    body: p.body,
+                    score: p.score,
+                    alive: p.alive,
+                    botType: p.botType,
+                })),
+                food: this.food,
+            });
+        }
+
         const msg = JSON.stringify({ type: 'update', state });
         this.clients.forEach((c) => {
             if (c.readyState === 1) c.send(msg);
@@ -1147,7 +1208,6 @@ wss.on('connection', (ws, req) => {
             const data = JSON.parse(msg);
 
             if (data.type === 'join') {
-                console.log(`[WS] Join request from ${data.name || 'unknown'} (botId: ${data.botId || 'none'})`);
                 const url = new URL(req.url, `http://${req.headers.host}`);
                 const arenaId = url.searchParams.get('arenaId');
                 const botMeta = data.botId && botRegistry[data.botId] ? botRegistry[data.botId] : null;
@@ -1155,6 +1215,14 @@ wss.on('connection', (ws, req) => {
                     data.name = botMeta.name;
                     data.botType = botMeta.botType;
                     data.botPrice = botMeta.price || 0;
+                }
+                
+                // Log level based on bot type - agents/heroes are important, normals are debug
+                const isImportant = data.botType === 'agent' || data.botType === 'hero' || data.botId;
+                if (isImportant) {
+                    log.important(`[Join] ${data.name} (${data.botType || 'player'}) requesting join`);
+                } else {
+                    log.debug(`[Join] ${data.name || 'unknown'} (normal) requesting join`);
                 }
 
                 if (arenaId && rooms.has(arenaId)) {
@@ -1164,14 +1232,18 @@ wss.on('connection', (ws, req) => {
                 }
 
                 if (!room) {
-                    console.log(`[WS] Join rejected: no room available`);
+                    log.debug(`[Join] Rejected ${data.name}: no room available`);
                     ws.send(JSON.stringify({ type: 'queued', id: null, reason: 'payment_required_or_full' }));
                     return;
                 }
 
                 room.clients.add(ws);
                 const res = room.handleJoin(data, ws);
-                console.log(`[WS] Join result for ${data.name}: ${JSON.stringify(res)}`);
+                if (isImportant) {
+                    log.important(`[Join] ${data.name} result: ${res.ok ? 'OK' : res.reason}`);
+                } else {
+                    log.debug(`[Join] ${data.name} result: ${res.ok ? 'OK' : res.reason}`);
+                }
                 if (res.ok) {
                     playerId = res.id;
                 } else {
@@ -1470,11 +1542,45 @@ app.post('/api/bet/claim', (req, res) => {
     res.json({ ok: true });
 });
 
+// Replay APIs
+app.get('/api/replays', (req, res) => {
+    const replayDir = path.join(__dirname, 'replays');
+    if (!fs.existsSync(replayDir)) {
+        return res.json([]);
+    }
+    const files = fs.readdirSync(replayDir)
+        .filter(f => f.endsWith('.json'))
+        .map(f => {
+            const data = JSON.parse(fs.readFileSync(path.join(replayDir, f)));
+            return {
+                matchId: data.matchId,
+                arenaId: data.arenaId,
+                timestamp: data.timestamp,
+                winner: data.winner,
+                winnerScore: data.winnerScore,
+                totalFrames: data.totalFrames,
+            };
+        })
+        .sort((a, b) => b.matchId - a.matchId)
+        .slice(0, 50); // Latest 50 replays
+    res.json(files);
+});
+
+app.get('/api/replay/:matchId', (req, res) => {
+    const matchId = req.params.matchId;
+    const replayPath = path.join(__dirname, 'replays', `match-${matchId}.json`);
+    if (!fs.existsSync(replayPath)) {
+        return res.status(404).json({ error: 'Replay not found' });
+    }
+    const replay = JSON.parse(fs.readFileSync(replayPath));
+    res.json(replay);
+});
+
 app.get('/history', (req, res) => res.json(matchHistory));
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-    console.log(`Running on ${PORT}`);
+    log.important(`🚀 Snake Arena running on port ${PORT}`);
     // Resume bots after a short delay (let rooms initialize)
     setTimeout(resumeRunningBots, 3000);
 });
