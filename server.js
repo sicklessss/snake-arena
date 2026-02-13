@@ -1066,6 +1066,8 @@ function leaderboardFromHistory(filterArenaId = null) {
     const counts = {};
     matchHistory.forEach(h => {
         if (filterArenaId && h.arenaId !== filterArenaId) return;
+        // Skip empty matches (no players = No Winner with score 0)
+        if (h.winner === 'No Winner' && h.score === 0) return;
         const key = h.winner || 'No Winner';
         counts[key] = (counts[key] || 0) + 1;
     });
@@ -1085,7 +1087,7 @@ app.post('/api/bot/register', requireUploadKey, (req, res) => {
         owner: (owner || 'unknown').toString().slice(0, 64),
         price: isNaN(safePrice) ? 0 : safePrice,
         botType: botType || 'agent',
-        credits: 5,
+        credits: 1000,
         createdAt: Date.now()
     };
     saveBotRegistry();
