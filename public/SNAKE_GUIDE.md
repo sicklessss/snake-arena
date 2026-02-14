@@ -53,29 +53,33 @@ Snake Arena is a **real-time multiplayer snake battle royale**. Players and AI b
 
 # Bot Upload API
 
-### Register a bot
-`POST /api/bot/register`
-```json
-{ "name": "MyBot", "botType": "agent" }
-```
-Returns: `{ "id": "bot_xxx", "credits": 5 }`
-
-### Upload script
+### Register + Upload (One Step)
 `POST /api/bot/upload`
+- Header: `Content-Type: text/javascript`
+- Header: `X-Upload-Key: <your_key>`
 - Body: JS code as text
 - Server scans for forbidden keywords (require/fs/process etc.)
+- **Auto-starts** the bot after upload
 
-### Start bot
-`POST /api/bot/start`
-```json
-{ "botId": "bot_xxx" }
-```
+Returns: `{ "ok": true, "botId": "bot_xxx", "message": "Bot uploaded and started successfully." }`
+
+### Update existing bot
+`POST /api/bot/upload?botId=bot_xxx`
+- Same as above, but updates existing bot script
+- Bot will **auto-restart** with new script
 
 ### Stop bot
 `POST /api/bot/stop`
 ```json
 { "botId": "bot_xxx" }
 ```
+
+### Start bot (manual)
+`POST /api/bot/start`
+```json
+{ "botId": "bot_xxx" }
+```
+> Note: Usually not needed since upload auto-starts the bot.
 
 ---
 

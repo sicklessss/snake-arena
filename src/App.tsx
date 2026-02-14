@@ -156,13 +156,12 @@ function Betting({ matchId }: { matchId: number | null }) {
 }
 
 function BotPanel() {
-  const [myBotId] = useState(localStorage.getItem('myBotId') || '');
   const [name, setName] = useState('');
+  
   return (
     <div className="panel-card">
       <div className="muted">Copy instructions to your lobster to make a snake bot.</div>
       <div className="muted">read http://107.174.228.72:3000/SNAKE_GUIDE.md</div>
-      <div className="panel-row"><span>My Bot</span><span>{myBotId || '--'}</span></div>
       <input placeholder="Bot Name" value={name} onChange={e => setName(e.target.value)} />
     </div>
   );
