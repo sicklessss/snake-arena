@@ -1318,7 +1318,7 @@ function leaderboardFromHistory(filterArenaId = null) {
         .sort((a,b)=>b.wins-a.wins);
 }
 
-app.post('/api/bot/register', requireUploadKey, (req, res) => {
+app.post('/api/bot/register', rateLimit({ windowMs: 60_000, max: 10 }), (req, res) => {
     const { name, price, owner, botType } = req.body || {};
     const safeName = (name || 'AgentBot').toString().slice(0, MAX_NAME_LEN);
     const safePrice = Number(price || 0);
@@ -1429,7 +1429,7 @@ app.get('/api/leaderboard/arena/:arenaId', (req, res) => {
 });
 
 // --- Bot Upload & Sandbox API ---
-app.post('/api/bot/upload', requireUploadKey, rateLimit({ windowMs: 60_000, max: 12 }), async (req, res) => {
+app.post('/api/bot/upload', rateLimit({ windowMs: 60_000, max: 10 }), async (req, res) => {
     try {
         const { botId } = req.query;
         let scriptContent = req.body;
