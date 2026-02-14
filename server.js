@@ -1480,12 +1480,10 @@ app.post('/api/bot/upload', requireUploadKey, rateLimit({ windowMs: 60_000, max:
             prepareRoomForAgentUpload(targetBotId);
         }
 
-        // 4. Restart if running
-        if (activeWorkers.has(targetBotId)) {
-            startBotWorker(targetBotId);
-        }
+        // 4. Auto-start bot (restart if already running, start if new)
+        startBotWorker(targetBotId);
 
-        res.json({ ok: true, botId: targetBotId, message: 'Bot uploaded and scanned successfully.' });
+        res.json({ ok: true, botId: targetBotId, message: 'Bot uploaded and started successfully.' });
     } catch (e) {
         console.error(e);
         res.status(500).json({ error: 'upload_failed' });
