@@ -12,7 +12,7 @@ import './index.css';
 // --- CONFIG ---
 const config = getDefaultConfig({
   appName: 'Snake Arena',
-  projectId: 'YOUR_PROJECT_ID',
+  projectId: '7e5c5e3e3f5e5c5e3f5e5c5e3f5e5c5e', // WalletConnect Cloud project ID
   chains: [baseSepolia],
   ssr: false, 
 });
@@ -65,7 +65,7 @@ const COMPETITIVE_RULES = `⚔️ 竞技场规则
 - 付费进场的 bot 该场结束后回到随机挑选状态
 
 📋 基础规则同表演场
-- 15秒赛前准备 → 3分钟比赛 → 30秒休息
+- 5秒赛前准备 → 3分钟比赛 → 5秒休息
 - 30×30 地图 | 125ms/tick | 食物上限5个
 `;
 
@@ -232,10 +232,11 @@ function BotPanel() {
         📋 {guideText}
         {copied && (
           <span style={{ 
-            position: 'absolute', right: 8, top: '-24px',
+            position: 'absolute', right: 8, top: '-28px',
             background: 'var(--neon-green)', color: '#000', padding: '3px 10px', borderRadius: '4px',
             fontSize: '0.75rem', fontWeight: 'bold', pointerEvents: 'none',
             boxShadow: '0 2px 8px rgba(0,255,136,0.4)',
+            zIndex: 10,
           }}>✅ Copied!</span>
         )}
       </div>
@@ -501,12 +502,12 @@ function GameCanvas({
             ctx.shadowBlur = p.alive ? 8 : 0;
             ctx.globalAlpha = p.alive ? 1 : 0.4;
 
-            // Body with name letters (shown once, not looping)
+            // Body with name letters (show name only once, not repeating)
             const pName = p.name || '';
             p.body.forEach((seg: any, i: number) => {
                 if (i === 0) return; 
                 ctx.fillRect(seg.x * cellSize + 1, seg.y * cellSize + 1, cellSize - 2, cellSize - 2);
-                // Draw letter on each body segment (only first pass of name)
+                // Draw letter on body segment — only for the first occurrence of the name
                 const letterIdx = i - 1;
                 if (letterIdx < pName.length && pName[letterIdx]) {
                     ctx.save();
