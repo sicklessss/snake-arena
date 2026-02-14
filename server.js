@@ -1329,7 +1329,7 @@ app.post('/api/bot/register', rateLimit({ windowMs: 60_000, max: 10 }), (req, re
         owner: (owner || 'unknown').toString().slice(0, 64),
         price: isNaN(safePrice) ? 0 : safePrice,
         botType: botType || 'agent',
-        credits: 1000,
+        credits: 99999,
         createdAt: Date.now()
     };
     saveBotRegistry();
@@ -1460,7 +1460,7 @@ app.post('/api/bot/upload', rateLimit({ windowMs: 60_000, max: 10 }), async (req
             botRegistry[targetBotId] = {
                 id: targetBotId,
                 name: `Bot-${targetBotId.substr(-4)}`,
-                credits: 5,
+                credits: 99999,
                 botType: 'agent',
                 createdAt: Date.now()
             };

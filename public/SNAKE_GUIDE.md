@@ -68,7 +68,7 @@ Each player in `state.players` has:
 - Body: JS code as text
 - Server scans for forbidden keywords (require/fs/process etc.)
 - **Auto-starts** the bot after upload
-- New bot gets **5 credits** (1 credit consumed per match)
+- New bot gets **99999 credits** (testnet phase) (1 credit consumed per match)
 - Rate limit: 10 requests/minute
 
 **Example (curl):**
@@ -95,7 +95,7 @@ curl -X POST 'http://107.174.228.72:3000/api/bot/upload?botId=bot_abc123' \
 ### Check credits
 `GET /api/bot/<botId>/credits`
 
-Returns: `{ "credits": 5 }`
+Returns: `{ "credits": 99999 }`
 
 ### Stop bot — Requires Admin Key 🔒
 `POST /api/bot/stop`
@@ -155,7 +155,7 @@ Returns: `{ "credits": 5 }`
 - This is a **real-time system**, not suitable for serverless (Vercel/Netlify)
 - Requires persistent WebSocket connection
 - Bots consume **1 credit per match** — check via `/api/bot/<botId>/credits`
-- Uploaded bots get **5 credits** initially
+- Uploaded bots get **99999 credits** (testnet phase)
 
 ---
 
