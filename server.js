@@ -337,6 +337,12 @@ class GameRoom {
         this.lastSurvivorForVictory = null;
         this.replayFrames = []; // Record frames for replay
 
+        // Competitive arena fields
+        this.obstacles = [];          // { x, y, solid: bool, blinkTimer: int }
+        this.obstacleTick = 0;        // Counts ticks for obstacle spawn timing
+        this.matchNumber = 1;         // Total match count for this room
+        this.paidEntries = {};        // { matchNumber: [botId, ...] } - paid entries for specific matches
+
         this.startLoops();
     }
 
@@ -438,6 +444,26 @@ class GameRoom {
 
         this.turn++;
 
+        // --- Competitive: Obstacle System ---
+        if (this.type === 'competitive' && this.gameState === 'PLAYING') {
+            this.obstacleTick++;
+            
+            // Update blink timers
+            for (const obs of this.obstacles) {
+                if (!obs.solid && obs.blinkTimer > 0) {
+                    obs.blinkTimer--;
+                    if (obs.blinkTimer <= 0) {
+                        obs.solid = true;
+                    }
+                }
+            }
+            
+            // Spawn new obstacle every 80 ticks (10 seconds at 125ms/tick)
+            if (this.obstacleTick % 80 === 0) {
+                this.spawnObstacle();
+            }
+        }
+
         // Auto-move for normal bots (no ws)
         Object.values(this.players).forEach((p) => {
             if (p.botType === 'normal' && !p.ws) {
@@ -516,6 +542,16 @@ class GameRoom {
                     }
                 }
             });
+
+            // Competitive: Check obstacle collision
+            if (this.type === 'competitive' && p.alive) {
+                for (const obs of this.obstacles) {
+                    if (obs.solid && obs.x === head.x && obs.y === head.y) {
+                        this.killPlayer(p, 'obstacle');
+                        break;
+                    }
+                }
+            }
         });
 
         const alivePlayers = Object.values(this.players).filter((p) => p.alive);
@@ -619,6 +655,84 @@ class GameRoom {
         this.broadcastState();
     }
 
+    spawnObstacle() {
+        const size = Math.floor(Math.random() * 16) + 1; // 1 to 16 cells
+        const maxSize = Math.min(size, 12); // cap at 12 to not be too crazy
+        
+        // Pick a random seed position (avoid edges and existing obstacles)
+        let seedX, seedY, tries = 0;
+        do {
+            seedX = Math.floor(Math.random() * (CONFIG.gridSize - 4)) + 2;
+            seedY = Math.floor(Math.random() * (CONFIG.gridSize - 4)) + 2;
+            tries++;
+        } while (tries < 50 && this.isCellBlocked(seedX, seedY));
+        
+        if (tries >= 50) return; // Couldn't find a good spot
+        
+        // BFS expand from seed to create irregular shape
+        const cells = [{ x: seedX, y: seedY }];
+        const visited = new Set();
+        visited.add(seedX + ',' + seedY);
+        const queue = [{ x: seedX, y: seedY }];
+        
+        const dirs = [{ x: 1, y: 0 }, { x: -1, y: 0 }, { x: 0, y: 1 }, { x: 0, y: -1 }];
+        
+        while (cells.length < maxSize && queue.length > 0) {
+            // Random pick from queue for irregular shapes
+            const idx = Math.floor(Math.random() * queue.length);
+            const current = queue[idx];
+            queue.splice(idx, 1);
+            
+            // Shuffle directions for randomness
+            const shuffled = dirs.slice().sort(() => Math.random() - 0.5);
+            
+            for (const d of shuffled) {
+                if (cells.length >= maxSize) break;
+                const nx = current.x + d.x;
+                const ny = current.y + d.y;
+                const key = nx + ',' + ny;
+                
+                if (nx >= 1 && nx < CONFIG.gridSize - 1 && ny >= 1 && ny < CONFIG.gridSize - 1 
+                    && !visited.has(key) && !this.isCellBlocked(nx, ny)) {
+                    visited.add(key);
+                    cells.push({ x: nx, y: ny });
+                    queue.push({ x: nx, y: ny });
+                }
+            }
+        }
+        
+        // Add obstacle cells with blink timer (16 ticks = 2 seconds)
+        for (const cell of cells) {
+            this.obstacles.push({
+                x: cell.x,
+                y: cell.y,
+                solid: false,
+                blinkTimer: 16
+            });
+        }
+        
+        log.info('[Competitive] Spawned obstacle with ' + cells.length + ' cells at (' + seedX + ',' + seedY + ')');
+    }
+
+    isCellBlocked(x, y) {
+        // Check if cell has a solid obstacle
+        for (const obs of this.obstacles) {
+            if (obs.x === x && obs.y === y) return true;
+        }
+        // Check if cell has a player body
+        for (const p of Object.values(this.players)) {
+            if (!p.body) continue;
+            for (const seg of p.body) {
+                if (seg.x === x && seg.y === y) return true;
+            }
+        }
+        // Check food
+        for (const f of this.food) {
+            if (f.x === x && f.y === y) return true;
+        }
+        return false;
+    }
+
     endMatchByTime() {
         let longest = null;
         let maxLen = 0;
@@ -696,6 +810,13 @@ class GameRoom {
         this.timerSeconds = 15;
         this.food = [];
         this.spawnIndex = 0;
+        
+        // Clear obstacles for competitive
+        if (this.type === 'competitive') {
+            this.obstacles = [];
+            this.obstacleTick = 0;
+            this.matchNumber++;
+        }
 
         // Preserve queued bots and re-queue current players for next match
         const preserved = this.waitingRoom || {};
@@ -739,6 +860,26 @@ class GameRoom {
         this.lastSurvivorForVictory = null;
         this.matchTimeLeft = MATCH_DURATION;
         colorIndex = 0;
+        
+        // Competitive: re-seed with normal bots if room is empty/low
+        if (this.type === 'competitive') {
+            const currentCount = Object.keys(this.waitingRoom).length;
+            if (currentCount < this.maxPlayers) {
+                const needed = this.maxPlayers - currentCount;
+                for (let i = 0; i < needed; i++) {
+                    const id = 'normal_' + Math.random().toString(36).slice(2, 7);
+                    this.waitingRoom[id] = {
+                        id,
+                        name: 'Normal-' + id.slice(-3),
+                        color: getNextColor(),
+                        ws: null,
+                        botType: 'normal',
+                        botId: null,
+                        botPrice: 0,
+                    };
+                }
+            }
+        }
     }
 
     startGame() {
@@ -815,6 +956,8 @@ class GameRoom {
             players: displayPlayers,
             waitingPlayers: waitingPlayers,
             food: this.food,
+            obstacles: this.type === 'competitive' ? this.obstacles : [],
+            matchNumber: this.matchNumber || 1,
             victoryPause: this.victoryPauseTimer > 0,
             victoryPauseTime: Math.ceil(this.victoryPauseTimer / 8),
         };
@@ -834,6 +977,7 @@ class GameRoom {
                     botType: p.botType,
                 })),
                 food: this.food,
+                obstacles: this.type === 'competitive' ? this.obstacles.filter(o => o.solid || o.blinkTimer > 0) : [],
             });
         }
 
@@ -972,8 +1116,101 @@ function createRoom(type) {
 
 // init rooms
 createRoom('performance');
-createRoom('competitive');
-createRoom('competitive');
+
+// Competitive arena - only one room, seeded with normal bots
+function createCompetitiveRoom() {
+    const id = 'competitive-1';
+    const room = new GameRoom({ id, type: 'competitive' });
+    rooms.set(id, room);
+    competitiveRooms.push(room);
+    seedNormalBots(room, ROOM_MAX_PLAYERS.competitive);
+    
+    // Periodically check and auto-fill with registered agent bots
+    setInterval(() => {
+        if (room.gameState === 'COUNTDOWN' && room.timerSeconds > 3) {
+            autoFillCompetitiveRoom(room);
+        }
+    }, 2000);
+    
+    return room;
+}
+
+function autoFillCompetitiveRoom(room) {
+    const currentPlayers = { ...room.waitingRoom, ...room.players };
+    const currentBotIds = new Set();
+    Object.values(currentPlayers).forEach(p => {
+        if (p.botId) currentBotIds.add(p.botId);
+    });
+    
+    // Check paid entries for this match
+    const paidForMatch = room.paidEntries[room.matchNumber] || [];
+    
+    // Add paid entries first
+    for (const botId of paidForMatch) {
+        if (currentBotIds.has(botId)) continue;
+        if (Object.keys(room.waitingRoom).length >= room.maxPlayers) break;
+        
+        const meta = botRegistry[botId];
+        if (!meta || meta.botType !== 'agent') continue;
+        
+        const id = 'comp_' + Math.random().toString(36).slice(2, 7);
+        room.waitingRoom[id] = {
+            id,
+            name: meta.name || 'Agent-' + botId.slice(-4),
+            color: getNextColor(),
+            ws: null,
+            botType: 'agent',
+            botId: botId,
+            botPrice: 0,
+            paidEntry: true,
+        };
+        currentBotIds.add(botId);
+        log.important('[Competitive] Paid entry: ' + meta.name + ' (' + botId + ') for match #' + room.matchNumber);
+    }
+    
+    // Random fill remaining slots with registered agent bots
+    const agentBotIds = Object.keys(botRegistry).filter(id => 
+        botRegistry[id].botType === 'agent' && 
+        botRegistry[id].scriptPath && 
+        !currentBotIds.has(id)
+    );
+    
+    // Shuffle
+    for (let i = agentBotIds.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [agentBotIds[i], agentBotIds[j]] = [agentBotIds[j], agentBotIds[i]];
+    }
+    
+    // Replace normal bots with agents
+    const normalIds = Object.keys(room.waitingRoom).filter(id => room.waitingRoom[id].botType === 'normal');
+    let replaced = 0;
+    
+    for (const botId of agentBotIds) {
+        if (replaced >= normalIds.length) break;
+        if (Object.keys(room.waitingRoom).length >= room.maxPlayers && normalIds.length <= replaced) break;
+        
+        // Kick a normal bot to make room
+        if (normalIds[replaced]) {
+            delete room.waitingRoom[normalIds[replaced]];
+        }
+        
+        const meta = botRegistry[botId];
+        const id = 'comp_' + Math.random().toString(36).slice(2, 7);
+        room.waitingRoom[id] = {
+            id,
+            name: meta.name || 'Agent-' + botId.slice(-4),
+            color: getNextColor(),
+            ws: null,
+            botType: 'agent',
+            botId: botId,
+            botPrice: 0,
+        };
+        currentBotIds.add(botId);
+        replaced++;
+    }
+}
+
+createCompetitiveRoom();
 
 function seedNormalBots(room, count = 10) {
     for (let i = 0; i < count; i++) {
@@ -1380,17 +1617,21 @@ app.get('/api/bot/:botId/credits', (req, res) => {
 app.get('/api/arena/status', (req, res) => {
     res.json({
         performance: performanceRooms.map(r => ({
-            ...getRoomStatus(r),
-            agents: countAgentsInRoom(r)
+            id: r.id,
+            players: Object.keys(r.players).length,
+            waiting: Object.keys(r.waitingRoom).length,
+            gameState: r.gameState,
         })),
-        competitive: competitiveRooms.map(getRoomStatus),
-        totalAgents: countTotalAgents(),
-        currentPriceAgents: countCurrentPriceAgents(),
-        maxCapacity: ROOM_LIMITS.performance * 10,
-        entryFee: getEntryFee(),
-        allSlotsFilled: allSlotsFilled()
+        competitive: competitiveRooms.map(r => ({
+            id: r.id,
+            matchNumber: r.matchNumber,
+            players: Object.keys(r.players).length,
+            waiting: Object.keys(r.waitingRoom).length,
+            gameState: r.gameState,
+            obstacleCount: r.obstacles ? r.obstacles.filter(o => o.solid).length : 0,
+        })),
     });
-});
+})
 
 app.post('/api/arena/join', (req, res) => {
     const { botId, arenaType } = req.body || {};
@@ -1418,6 +1659,71 @@ app.post('/api/arena/kick', requireAdminKey, (req, res) => {
     if (!victimId) return res.status(404).json({ error: 'target_not_found_or_in_game' });
     delete room.waitingRoom[victimId];
     res.json({ ok: true });
+});
+
+// --- Competitive Arena API ---
+app.get('/api/competitive/status', (req, res) => {
+    const room = rooms.get('competitive-1');
+    if (!room) return res.status(404).json({ error: 'no_competitive_room' });
+    
+    res.json({
+        matchNumber: room.matchNumber,
+        matchId: room.currentMatchId,
+        gameState: room.gameState,
+        timeLeft: room.timerSeconds,
+        matchTimeLeft: room.matchTimeLeft,
+        obstacleCount: room.obstacles.filter(o => o.solid).length,
+        playerCount: Object.keys(room.players).length + Object.keys(room.waitingRoom).length,
+        maxPlayers: room.maxPlayers,
+    });
+});
+
+app.get('/api/competitive/registered', (req, res) => {
+    const agents = Object.entries(botRegistry)
+        .filter(([_, meta]) => meta.botType === 'agent' && meta.scriptPath)
+        .map(([id, meta]) => ({
+            botId: id,
+            name: meta.name,
+            credits: meta.credits,
+        }));
+    res.json(agents);
+});
+
+app.post('/api/competitive/enter', (req, res) => {
+    const { botId, matchNumber, txHash } = req.body || {};
+    
+    if (!botId || !matchNumber) {
+        return res.status(400).json({ error: 'missing_params', message: 'botId and matchNumber required' });
+    }
+    
+    const meta = botRegistry[botId];
+    if (!meta || meta.botType !== 'agent') {
+        return res.status(404).json({ error: 'bot_not_found', message: 'Bot must be a registered agent' });
+    }
+    
+    const room = rooms.get('competitive-1');
+    if (!room) return res.status(500).json({ error: 'no_competitive_room' });
+    
+    if (matchNumber < room.matchNumber) {
+        return res.status(400).json({ error: 'invalid_match', message: 'Match number must be >= current match #' + room.matchNumber });
+    }
+    
+    // Record paid entry
+    if (!room.paidEntries[matchNumber]) {
+        room.paidEntries[matchNumber] = [];
+    }
+    room.paidEntries[matchNumber].push(botId);
+    
+    // Clean up old paid entries (keep only future matches)
+    for (const mn of Object.keys(room.paidEntries)) {
+        if (parseInt(mn) < room.matchNumber) {
+            delete room.paidEntries[mn];
+        }
+    }
+    
+    log.important('[Competitive] Paid entry registered: ' + meta.name + ' (' + botId + ') for match #' + matchNumber + ' tx:' + (txHash || 'none'));
+    
+    res.json({ ok: true, matchNumber, botId, message: 'Entry confirmed for match #' + matchNumber });
 });
 
 app.get('/api/leaderboard/global', (req, res) => {
