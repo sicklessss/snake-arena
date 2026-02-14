@@ -12,3 +12,5 @@ snake.log
 hero.log
 public_legacy_/
 public/assets/
+dist/
+snake-deploy.tar.gz
