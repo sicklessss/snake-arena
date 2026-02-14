@@ -331,7 +331,7 @@ class GameRoom {
         this.spawnIndex = 0;
         this.gameState = 'COUNTDOWN';
         this.winner = null;
-        this.timerSeconds = 15;
+        this.timerSeconds = 5;
         this.currentMatchId = nextMatchId();
         this.victoryPauseTimer = 0;
         this.lastSurvivorForVictory = null;
@@ -864,12 +864,29 @@ class GameRoom {
         if (deathType === 'eaten') {
             p.body = [p.body[0]];
         }
+        
+        // Competitive: convert dead snake body to obstacles
+        if (this.type === 'competitive' && p.body && p.body.length > 0 && deathType !== 'eaten') {
+            for (const seg of p.body) {
+                // Add as obstacle (already solid, no blink)
+                this.obstacles.push({
+                    x: seg.x,
+                    y: seg.y,
+                    solid: true,
+                    blinkTimer: 0,
+                    fromCorpse: true,
+                });
+            }
+            // Remove food on those cells
+            const deadCells = new Set(p.body.map(s => s.x + ',' + s.y));
+            this.food = this.food.filter(f => !deadCells.has(f.x + ',' + f.y));
+        }
     }
 
     startGameOver(survivor) {
         this.gameState = 'GAMEOVER';
         this.winner = survivor ? survivor.name : 'No Winner';
-        this.timerSeconds = 30;
+        this.timerSeconds = 5;
         saveHistory(this.id, this.winner, survivor ? survivor.score : 0);
         
         // Save replay
@@ -915,7 +932,7 @@ class GameRoom {
 
     startCountdown() {
         this.gameState = 'COUNTDOWN';
-        this.timerSeconds = 15;
+        this.timerSeconds = 5;
         this.food = [];
         this.spawnIndex = 0;
         
@@ -1463,11 +1480,14 @@ function kickRandomNormal(room) {
 }
 
 function prepareRoomForAgentUpload(botId) {
+    // Prefer room with fewest agents (spread bots across rooms)
     let targetRoom = null;
+    let minAgents = Infinity;
     for (const room of performanceRooms) {
-        if (countAgentsInRoom(room) < room.maxPlayers) {
+        const agentCount = countAgentsInRoom(room);
+        if (agentCount < room.maxPlayers && agentCount < minAgents) {
+            minAgents = agentCount;
             targetRoom = room;
-            break;
         }
     }
 
