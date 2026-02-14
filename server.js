@@ -464,58 +464,118 @@ class GameRoom {
             }
         }
 
-        // Auto-move for bots without ws connection (wall-aware AI)
+        // Auto-move for bots without ws connection (flood-fill AI)
         Object.values(this.players).forEach((p) => {
             if (!p.ws && p.alive) {
                 const head = p.body[0];
+                const G = CONFIG.gridSize;
                 const dirs = [
                     { x: 1, y: 0 }, { x: -1, y: 0 },
                     { x: 0, y: 1 }, { x: 0, y: -1 }
                 ];
                 
-                // Build danger set
-                const danger = new Set();
+                // Build grid: 0=empty, 1=blocked
+                const grid = [];
+                for (let y = 0; y < G; y++) {
+                    grid[y] = new Uint8Array(G);
+                }
                 Object.values(this.players).forEach(other => {
                     if (!other.body) return;
-                    other.body.forEach(seg => danger.add(seg.x + ',' + seg.y));
+                    other.body.forEach(seg => {
+                        if (seg.x >= 0 && seg.x < G && seg.y >= 0 && seg.y < G)
+                            grid[seg.y][seg.x] = 1;
+                    });
                 });
                 // Add solid obstacles
                 if (this.obstacles) {
                     this.obstacles.forEach(obs => {
-                        if (obs.solid) danger.add(obs.x + ',' + obs.y);
+                        if (obs.solid && obs.x >= 0 && obs.x < G && obs.y >= 0 && obs.y < G)
+                            grid[obs.y][obs.x] = 1;
                     });
                 }
                 
-                // Find safe directions (not opposite, not wall, not body)
-                const safeDirs = dirs.filter(d => {
-                    if (isOpposite(d, p.direction)) return false;
-                    const nx = head.x + d.x;
-                    const ny = head.y + d.y;
-                    if (nx < 0 || nx >= CONFIG.gridSize || ny < 0 || ny >= CONFIG.gridSize) return false;
-                    if (danger.has(nx + ',' + ny)) return false;
-                    return true;
-                });
-                
-                if (safeDirs.length > 0) {
-                    // Prefer food direction if nearby
-                    let bestDir = safeDirs[Math.floor(Math.random() * safeDirs.length)];
-                    if (this.food.length > 0) {
-                        let minDist = Infinity;
-                        for (const d of safeDirs) {
-                            const nx = head.x + d.x;
-                            const ny = head.y + d.y;
-                            for (const f of this.food) {
-                                const dist = Math.abs(nx - f.x) + Math.abs(ny - f.y);
-                                if (dist < minDist) {
-                                    minDist = dist;
-                                    bestDir = d;
-                                }
+                // Mark enemy head adjacent cells as dangerous
+                const enemyHeadDanger = new Set();
+                Object.values(this.players).forEach(other => {
+                    if (other.id === p.id || !other.alive || !other.body || !other.body[0]) return;
+                    const oh = other.body[0];
+                    for (const d of dirs) {
+                        const ex = oh.x + d.x, ey = oh.y + d.y;
+                        if (ex >= 0 && ex < G && ey >= 0 && ey < G) {
+                            if (other.body.length >= p.body.length) {
+                                enemyHeadDanger.add(ex + ',' + ey);
                             }
                         }
                     }
-                    p.nextDirection = bestDir;
+                });
+                
+                // Flood fill from a position
+                const floodFill = (sx, sy) => {
+                    if (sx < 0 || sx >= G || sy < 0 || sy >= G || grid[sy][sx] === 1) return 0;
+                    const visited = [];
+                    for (let y = 0; y < G; y++) visited[y] = new Uint8Array(G);
+                    const queue = [{ x: sx, y: sy }];
+                    visited[sy][sx] = 1;
+                    let count = 0;
+                    while (queue.length > 0) {
+                        const cur = queue.shift();
+                        count++;
+                        for (const d of dirs) {
+                            const nx = cur.x + d.x, ny = cur.y + d.y;
+                            if (nx >= 0 && nx < G && ny >= 0 && ny < G && !visited[ny][nx] && grid[ny][nx] !== 1) {
+                                visited[ny][nx] = 1;
+                                queue.push({ x: nx, y: ny });
+                            }
+                        }
+                    }
+                    return count;
+                };
+                
+                // Score each direction
+                const candidates = dirs
+                    .filter(d => !isOpposite(d, p.direction))
+                    .map(d => {
+                        const nx = head.x + d.x;
+                        const ny = head.y + d.y;
+                        if (nx < 0 || nx >= G || ny < 0 || ny >= G) return null;
+                        if (grid[ny][nx] === 1) return null;
+                        
+                        let score = 0;
+                        
+                        // Flood fill space
+                        const space = floodFill(nx, ny);
+                        if (space < p.body.length) score -= 10000;
+                        else if (space < p.body.length * 2) score -= 2000;
+                        score += space * 2;
+                        
+                        // Enemy head danger
+                        if (enemyHeadDanger.has(nx + ',' + ny)) score -= 5000;
+                        
+                        // Food attraction (lower weight when long)
+                        const foodWeight = p.body.length < 8 ? 8 : 3;
+                        let bestFoodDist = G * 2;
+                        for (const f of (this.food || [])) {
+                            const fd = Math.abs(nx - f.x) + Math.abs(ny - f.y);
+                            if (fd < bestFoodDist) bestFoodDist = fd;
+                        }
+                        score += (G * 2 - bestFoodDist) * foodWeight;
+                        
+                        // Prefer center
+                        const centerDist = Math.abs(nx - G / 2) + Math.abs(ny - G / 2);
+                        score -= centerDist * 0.3;
+                        
+                        // Penalize walls
+                        if (nx === 0 || nx === G - 1) score -= 30;
+                        if (ny === 0 || ny === G - 1) score -= 30;
+                        
+                        return { d, score };
+                    })
+                    .filter(Boolean);
+                
+                if (candidates.length > 0) {
+                    candidates.sort((a, b) => b.score - a.score);
+                    p.nextDirection = candidates[0].d;
                 } else {
-                    // No safe move, try any non-opposite
                     const any = dirs.filter(d => !isOpposite(d, p.direction));
                     p.nextDirection = any.length > 0 ? any[Math.floor(Math.random() * any.length)] : p.direction;
                 }
@@ -1169,7 +1229,7 @@ function createCompetitiveRoom() {
     const room = new GameRoom({ id, type: 'competitive' });
     rooms.set(id, room);
     competitiveRooms.push(room);
-    seedNormalBots(room, ROOM_MAX_PLAYERS.competitive);
+    seedNormalBots(room, 6); // Fewer bots for longer matches
     
     // Periodically check and auto-fill with registered agent bots
     setInterval(() => {
@@ -1604,6 +1664,12 @@ function leaderboardFromHistory(filterArenaId = null) {
 app.post('/api/bot/register', rateLimit({ windowMs: 60_000, max: 10 }), (req, res) => {
     const { name, price, owner, botType } = req.body || {};
     const safeName = (name || 'AgentBot').toString().slice(0, MAX_NAME_LEN);
+    
+    // Check name uniqueness
+    const existingName = Object.values(botRegistry).find(m => m.name === safeName);
+    if (existingName) {
+        return res.status(400).json({ error: 'name_taken', message: 'Bot name "' + safeName + '" is already in use' });
+    }
     const safePrice = Number(price || 0);
     const id = createBotId();
     botRegistry[id] = {
@@ -1804,7 +1870,16 @@ app.post('/api/bot/upload', rateLimit({ windowMs: 60_000, max: 10 }), async (req
             return res.status(400).json({ error: 'security_violation', message: `Forbidden keyword found: ${risk}` });
         }
         
-        // 2. Resolve Bot ID
+        // 2. Check name uniqueness
+        if (name) {
+            const safeName = name.toString().slice(0, 32);
+            const existing = Object.entries(botRegistry).find(([id, m]) => m.name === safeName && id !== botId);
+            if (existing) {
+                return res.status(400).json({ error: 'name_taken', message: 'Bot name "' + safeName + '" is already in use by ' + existing[0] });
+            }
+        }
+
+        // 3. Resolve Bot ID
         let targetBotId = botId;
         if (!targetBotId) {
             // Create new bot if no ID provided
