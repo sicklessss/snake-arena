@@ -155,7 +155,22 @@ function BotPanel() {
   const guideText = 'read http://107.174.228.72:3000/SNAKE_GUIDE.md';
   
   const handleCopy = () => {
-    navigator.clipboard.writeText(guideText).then(() => {
+    const doCopy = (text: string) => {
+      if (navigator.clipboard && window.isSecureContext) {
+        return navigator.clipboard.writeText(text);
+      }
+      // Fallback for HTTP
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+      return Promise.resolve();
+    };
+    doCopy(guideText).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     });
@@ -191,22 +206,27 @@ function BotPanel() {
   
   return (
     <div className="panel-card">
-      <div className="muted" style={{ marginBottom: '6px' }}>Click to copy instructions to your bot to make a snake bot and fight for you.</div>
+      <div style={{ marginBottom: '6px', color: '#fff', fontSize: '0.85rem' }}>Click to copy instructions to your bot to make a snake bot and fight for you.</div>
       <div 
         className="copy-box" 
         onClick={handleCopy}
+        role="button"
+        tabIndex={0}
+        onKeyDown={e => e.key === 'Enter' && handleCopy()}
         style={{ 
           cursor: 'pointer', 
-          padding: '10px', 
+          padding: '10px 12px', 
           background: '#0d0d20', 
           border: '1px solid var(--neon-blue)', 
           borderRadius: '6px',
           fontFamily: 'monospace',
-          fontSize: '0.85rem',
+          fontSize: '0.9rem',
           color: 'var(--neon-green)',
           position: 'relative',
-          userSelect: 'none',
-          transition: 'border-color 0.2s',
+          userSelect: 'all',
+          transition: 'border-color 0.2s, background 0.2s',
+          wordBreak: 'break-all' as const,
+          lineHeight: '1.4',
         }}
       >
         📋 {guideText}
@@ -238,37 +258,49 @@ function BotPanel() {
 
 function CompetitiveEnter({ matchNumber }: { matchNumber: number }) {
   const { isConnected } = useAccount();
-  const [botId, setBotId] = useState('');
+  const [botName, setBotName] = useState('');
   const [targetMatch, setTargetMatch] = useState('');
   const [status, setStatus] = useState('');
+  const [resolvedBotId, setResolvedBotId] = useState('');
   const { writeContract, data: hash, isPending } = useWriteContract();
   const { isLoading: isConfirming, isSuccess: isConfirmed } = useWaitForTransactionReceipt({ hash });
 
   useEffect(() => {
-    if (isConfirmed && hash) {
+    if (isConfirmed && hash && resolvedBotId) {
       setStatus('⏳ Confirming entry...');
       fetch('/api/competitive/enter', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ botId, matchNumber: parseInt(targetMatch), txHash: hash })
+        body: JSON.stringify({ botId: resolvedBotId, matchNumber: parseInt(targetMatch), txHash: hash })
       }).then(r => r.json()).then(data => {
         setStatus(data.ok ? '✅ Entry confirmed for match #' + targetMatch : '⚠️ ' + (data.error || 'Failed'));
       }).catch(() => setStatus('⚠️ Network Error'));
     }
-  }, [isConfirmed, hash, botId, targetMatch]);
+  }, [isConfirmed, hash, resolvedBotId, targetMatch]);
 
-  const handleEnter = () => {
+  const handleEnter = async () => {
     if (!isConnected) return alert('Connect Wallet');
-    if (!botId) return alert('Enter Bot ID');
+    if (!botName) return alert('Enter Bot Name');
     const mn = parseInt(targetMatch);
-    if (!mn || mn < matchNumber) return alert('Match number must be >= current match #' + matchNumber);
+    if (isNaN(mn) || mn < matchNumber) return alert('Match number must be >= current match #' + matchNumber);
     
+    // Lookup botId by name
     try {
+      setStatus('Looking up bot...');
+      const res = await fetch('/api/bot/lookup?name=' + encodeURIComponent(botName));
+      if (!res.ok) {
+        const err = await res.json();
+        setStatus('⚠️ ' + (err.error === 'bot_not_found' ? 'Bot "' + botName + '" not found' : err.error));
+        return;
+      }
+      const data = await res.json();
+      setResolvedBotId(data.botId);
+      
       writeContract({
         address: CONTRACT_ADDRESS,
         abi: CONTRACT_ABI,
         functionName: 'placeBet',
-        args: [BigInt(0), botId],
+        args: [BigInt(0), data.botId],
         value: parseEther('0.001'),
       });
     } catch (e: any) {
@@ -279,7 +311,7 @@ function CompetitiveEnter({ matchNumber }: { matchNumber: number }) {
   return (
     <div className="panel-card">
       <div className="panel-row"><span>Current Match</span><span>#{matchNumber}</span></div>
-      <input placeholder="Bot ID (e.g. bot_xxx)" value={botId} onChange={e => setBotId(e.target.value)} />
+      <input placeholder="Bot Name" value={botName} onChange={e => setBotName(e.target.value)} />
       <input 
         placeholder={`Target Match # (>= ${matchNumber})`}
         value={targetMatch} 
@@ -567,18 +599,21 @@ function GameCanvas({
 function App() {
   const [matchId, setMatchId] = useState<number | null>(null);
   const [players, setPlayers] = useState<any[]>([]);
-  const [leaderboard, setLeaderboard] = useState<any[]>([]);
+  const [perfLeaderboard, setPerfLeaderboard] = useState<any[]>([]);
+  const [compLeaderboard, setCompLeaderboard] = useState<any[]>([]);
   const [activePage, setActivePage] = useState<'performance' | 'competitive' | 'leaderboard'>('performance');
-  const [competitiveMatchNumber, setCompetitiveMatchNumber] = useState(1);
+  const [competitiveMatchNumber, setCompetitiveMatchNumber] = useState(0);
 
   useEffect(() => {
     const load = async () => {
       try {
-        const res = await fetch('/api/leaderboard/global');
-        if (!res.ok) return;
-        const data = await res.json();
-        setLeaderboard(data || []);
-      } catch (e) {}
+        const [perfRes, compRes] = await Promise.all([
+          fetch('/api/leaderboard/performance'),
+          fetch('/api/leaderboard/competitive'),
+        ]);
+        if (perfRes.ok) setPerfLeaderboard(await perfRes.json());
+        if (compRes.ok) setCompLeaderboard(await compRes.json());
+      } catch (_e) {}
     };
     load();
     const t = setInterval(load, 10000);
@@ -610,19 +645,35 @@ function App() {
 
             {activePage === 'leaderboard' ? (
               <div className="leaderboard-page">
-                <div className="panel-section" style={{ maxWidth: 600, margin: '0 auto', padding: 24 }}>
-                  <h2 style={{ color: 'var(--neon-green)', textAlign: 'center' }}>🏆 Global Leaderboard</h2>
-                  <ul className="fighter-list">
-                    {leaderboard.map((p: any, i: number) => (
-                      <li key={i} className="fighter-item alive">
-                        <span className="fighter-name">
-                          {i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i+1}`} {p.name}
-                        </span>
-                        <span className="fighter-length">{p.wins}W</span>
-                      </li>
-                    ))}
-                    {leaderboard.length === 0 && <li className="fighter-item"><span className="muted">No data yet</span></li>}
-                  </ul>
+                <div style={{ display: 'flex', gap: '24px', flexWrap: 'wrap', justifyContent: 'center', padding: '24px', width: '100%', maxWidth: '900px', margin: '0 auto' }}>
+                  <div className="panel-section" style={{ flex: 1, minWidth: '280px' }}>
+                    <h2 style={{ color: 'var(--neon-green)', textAlign: 'center' }}>🦀 Performance</h2>
+                    <ul className="fighter-list">
+                      {perfLeaderboard.map((p: any, i: number) => (
+                        <li key={i} className="fighter-item alive">
+                          <span className="fighter-name">
+                            {i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i+1}`} {p.name}
+                          </span>
+                          <span className="fighter-length">{p.wins}W</span>
+                        </li>
+                      ))}
+                      {perfLeaderboard.length === 0 && <li className="fighter-item"><span className="muted">No data yet</span></li>}
+                    </ul>
+                  </div>
+                  <div className="panel-section" style={{ flex: 1, minWidth: '280px' }}>
+                    <h2 style={{ color: 'var(--neon-pink)', textAlign: 'center' }}>⚔️ Competitive</h2>
+                    <ul className="fighter-list">
+                      {compLeaderboard.map((p: any, i: number) => (
+                        <li key={i} className="fighter-item alive">
+                          <span className="fighter-name">
+                            {i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i+1}`} {p.name}
+                          </span>
+                          <span className="fighter-length">{p.wins}W</span>
+                        </li>
+                      ))}
+                      {compLeaderboard.length === 0 && <li className="fighter-item"><span className="muted">No data yet</span></li>}
+                    </ul>
+                  </div>
                 </div>
               </div>
             ) : (
@@ -663,9 +714,9 @@ function App() {
                     </ul>
                   </div>
                   <div className="panel-section">
-                      <h3>🏆 Leaderboard</h3>
+                      <h3>🏆 {isCompetitive ? 'Competitive' : 'Performance'} Leaderboard</h3>
                       <ul className="fighter-list">
-                        {leaderboard.slice(0, 10).map((p: any, i: number) => (
+                        {(isCompetitive ? compLeaderboard : perfLeaderboard).slice(0, 10).map((p: any, i: number) => (
                           <li key={i} className="fighter-item">
                             <span className="fighter-name">{p.name}</span>
                             <span className="fighter-length">{p.wins}W</span>
