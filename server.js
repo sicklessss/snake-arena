@@ -113,7 +113,7 @@ app.use('/api', rateLimit({ windowMs: 60_000, max: 120 }));
 // --- Global History ---
 const HISTORY_FILE = 'history.json';
 let matchHistory = [];
-let matchNumber = 1;
+let matchNumber = 0;
 if (fs.existsSync(HISTORY_FILE)) {
     try {
         matchHistory = JSON.parse(fs.readFileSync(HISTORY_FILE));
@@ -340,7 +340,7 @@ class GameRoom {
         // Competitive arena fields
         this.obstacles = [];          // { x, y, solid: bool, blinkTimer: int }
         this.obstacleTick = 0;        // Counts ticks for obstacle spawn timing
-        this.matchNumber = 1;         // Total match count for this room
+        this.matchNumber = 0;         // Total match count for this room
         this.paidEntries = {};        // { matchNumber: [botId, ...] } - paid entries for specific matches
 
         this.startLoops();
@@ -1223,6 +1223,13 @@ function createRoom(type) {
 // init rooms
 createRoom('performance');
 
+// Auto-create additional performance rooms based on registered agent bots
+const agentCount = Object.values(botRegistry).filter(b => b.botType === 'agent' && b.scriptPath).length;
+if (agentCount > 5) {
+    createRoom('performance');
+    log.important('[Init] Created performance-2 (found ' + agentCount + ' agent bots)');
+}
+
 // Competitive arena - only one room, seeded with normal bots
 function createCompetitiveRoom() {
     const id = 'competitive-1';
@@ -1773,6 +1780,25 @@ app.post('/api/arena/kick', requireAdminKey, (req, res) => {
     res.json({ ok: true });
 });
 
+// --- Bot Registration (unlimited plays) ---
+app.post('/api/bot/register-unlimited', (req, res) => {
+    const { botId, txHash } = req.body || {};
+    if (!botId) return res.status(400).json({ error: 'missing_botId' });
+    
+    const bot = botRegistry[botId];
+    if (!bot) return res.status(404).json({ error: 'bot_not_found' });
+    
+    // Mark bot as unlimited (no credit consumption)
+    bot.unlimited = true;
+    bot.credits = 999999;
+    bot.registeredTxHash = txHash || null;
+    saveBotRegistry();
+    
+    log.important('[Register] Bot ' + bot.name + ' (' + botId + ') registered as unlimited. tx:' + (txHash || 'none'));
+    
+    res.json({ ok: true, botId, message: 'Bot registered with unlimited plays' });
+});
+
 // --- Competitive Arena API ---
 app.get('/api/competitive/status', (req, res) => {
     const room = rooms.get('competitive-1');
@@ -1838,6 +1864,7 @@ app.post('/api/competitive/enter', (req, res) => {
     res.json({ ok: true, matchNumber, botId, message: 'Entry confirmed for match #' + matchNumber });
 });
 
+app.post("/api/admin/reset-leaderboard", requireAdminKey, (req, res) => {    matchHistory = [];    matchNumber = 0;    fs.writeFileSync(HISTORY_FILE, "[]");    log.important("[Admin] Leaderboard reset");    res.json({ ok: true, message: "Leaderboard reset" });});
 app.get('/api/leaderboard/global', (req, res) => {
     res.json(leaderboardFromHistory());
 });
