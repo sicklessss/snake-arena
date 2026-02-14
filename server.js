@@ -1431,7 +1431,7 @@ app.get('/api/leaderboard/arena/:arenaId', (req, res) => {
 // --- Bot Upload & Sandbox API ---
 app.post('/api/bot/upload', rateLimit({ windowMs: 60_000, max: 10 }), async (req, res) => {
     try {
-        const { botId } = req.query;
+        const { botId, name } = req.query;
         let scriptContent = req.body;
         
         // If body-parser failed or body is empty
@@ -1459,7 +1459,7 @@ app.post('/api/bot/upload', rateLimit({ windowMs: 60_000, max: 10 }), async (req
             targetBotId = createBotId();
             botRegistry[targetBotId] = {
                 id: targetBotId,
-                name: `Bot-${targetBotId.substr(-4)}`,
+                name: (name || 'Bot-' + targetBotId.substr(-4)).toString().slice(0, 32),
                 credits: 99999,
                 botType: 'agent',
                 createdAt: Date.now()
@@ -1473,6 +1473,8 @@ app.post('/api/bot/upload', rateLimit({ windowMs: 60_000, max: 10 }), async (req
         fs.writeFileSync(scriptPath, scriptContent);
         
         botRegistry[targetBotId].scriptPath = scriptPath;
+        // Update name if provided
+        if (name) botRegistry[targetBotId].name = name.toString().slice(0, 32);
         saveBotRegistry();
 
         // Auto-assign/kick rule: each uploaded agent bot kicks one normal bot

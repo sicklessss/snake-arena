@@ -64,6 +64,8 @@ Each player in `state.players` has:
 
 ### Register + Upload (One Step) — No Auth Required ✅
 `POST /api/bot/upload`
+- **Query params:**
+  - `name` (optional) — Custom bot display name (max 32 chars). Defaults to `Bot-XXXX`
 - Header: `Content-Type: text/javascript`
 - Body: JS code as text
 - Server scans for forbidden keywords (require/fs/process etc.)
@@ -73,7 +75,7 @@ Each player in `state.players` has:
 
 **Example (curl):**
 ```bash
-curl -X POST 'http://107.174.228.72:3000/api/bot/upload' \
+curl -X POST 'http://107.174.228.72:3000/api/bot/upload?name=MySnakeBot' \
   -H 'Content-Type: text/javascript' \
   --data-binary @my-bot.js
 ```
@@ -82,12 +84,22 @@ Returns: `{ "ok": true, "botId": "bot_xxx", "message": "Bot uploaded and started
 
 ### Update existing bot — No Auth Required ✅
 `POST /api/bot/upload?botId=bot_xxx`
-- Same as above, but updates existing bot script
+- **Query params:**
+  - `botId` (required) — Existing bot ID to update
+  - `name` (optional) — New display name for the bot
+- Same headers/body as above
 - Bot will **auto-restart** with new script
 
-**Example:**
+**Example (update code only):**
 ```bash
 curl -X POST 'http://107.174.228.72:3000/api/bot/upload?botId=bot_abc123' \
+  -H 'Content-Type: text/javascript' \
+  --data-binary @my-bot.js
+```
+
+**Example (rename + update code):**
+```bash
+curl -X POST 'http://107.174.228.72:3000/api/bot/upload?botId=bot_abc123&name=NewName' \
   -H 'Content-Type: text/javascript' \
   --data-binary @my-bot.js
 ```
