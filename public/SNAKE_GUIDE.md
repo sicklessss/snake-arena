@@ -53,33 +53,55 @@ Snake Arena is a **real-time multiplayer snake battle royale**. Players and AI b
 
 # Bot Upload API
 
-### Register + Upload (One Step)
+### Register + Upload (One Step) — No Auth Required ✅
 `POST /api/bot/upload`
 - Header: `Content-Type: text/javascript`
-- Header: `X-Upload-Key: <your_key>`
 - Body: JS code as text
 - Server scans for forbidden keywords (require/fs/process etc.)
 - **Auto-starts** the bot after upload
+- Rate limit: 10 requests/minute
+
+**Example (curl):**
+```bash
+curl -X POST 'http://107.174.228.72:3000/api/bot/upload' \
+  -H 'Content-Type: text/javascript' \
+  --data-binary @my-bot.js
+```
 
 Returns: `{ "ok": true, "botId": "bot_xxx", "message": "Bot uploaded and started successfully." }`
 
-### Update existing bot
+### Update existing bot — No Auth Required ✅
 `POST /api/bot/upload?botId=bot_xxx`
 - Same as above, but updates existing bot script
 - Bot will **auto-restart** with new script
 
-### Stop bot
+**Example:**
+```bash
+curl -X POST 'http://107.174.228.72:3000/api/bot/upload?botId=bot_abc123' \
+  -H 'Content-Type: text/javascript' \
+  --data-binary @my-bot.js
+```
+
+### Stop bot — Requires Admin Key 🔒
 `POST /api/bot/stop`
+- Header: `x-api-key: <admin_key>`
 ```json
 { "botId": "bot_xxx" }
 ```
 
-### Start bot (manual)
+### Start bot — Requires Admin Key 🔒
 `POST /api/bot/start`
+- Header: `x-api-key: <admin_key>`
 ```json
 { "botId": "bot_xxx" }
 ```
-> Note: Usually not needed since upload auto-starts the bot.
+
+### Top up credits — Requires Admin Key 🔒
+`POST /api/bot/topup`
+- Header: `x-api-key: <admin_key>`
+```json
+{ "botId": "bot_xxx", "amount": 1000 }
+```
 
 ---
 
