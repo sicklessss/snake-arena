@@ -590,7 +590,7 @@ class GameRoom {
                 fy = Math.floor(Math.random() * CONFIG.gridSize);
                 tries++;
                 if (tries > 200) break;
-            } while (this.isCellOccupied(fx, fy) || this.food.some(f => f.x === fx && f.y === fy));
+            } while (this.isCellOccupied(fx, fy) || this.food.some(f => f.x === fx && f.y === fy) || (this.obstacles && this.obstacles.some(o => o.x === fx && o.y === fy)));
 
             if (tries <= 200) {
                 this.food.push({ x: fx, y: fy });
@@ -815,6 +815,8 @@ class GameRoom {
                 solid: false,
                 blinkTimer: 16
             });
+            // Remove any food on this cell
+            this.food = this.food.filter(f => !(f.x === cell.x && f.y === cell.y));
         }
         
         log.info('[Competitive] Spawned obstacle with ' + cells.length + ' cells at (' + seedX + ',' + seedY + ')');
@@ -1711,6 +1713,15 @@ app.post('/api/bot/set-price', requireAdminKey, (req, res) => {
     res.json({ ok: true, bot: botRegistry[botId] });
 });
 
+// --- Bot Lookup by Name (must be before :botId route) ---
+app.get('/api/bot/lookup', (req, res) => {
+    const { name } = req.query;
+    if (!name) return res.status(400).json({ error: 'missing_name' });
+    const entry = Object.entries(botRegistry).find(([_, m]) => m.name === name.toString());
+    if (!entry) return res.status(404).json({ error: 'bot_not_found' });
+    res.json({ botId: entry[0], name: entry[1].name, credits: entry[1].credits });
+});
+
 app.get('/api/bot/:botId', (req, res) => {
     const bot = botRegistry[req.params.botId];
     if (!bot) return res.status(404).json({ error: 'bot_not_found' });
@@ -1799,6 +1810,7 @@ app.post('/api/bot/register-unlimited', (req, res) => {
     res.json({ ok: true, botId, message: 'Bot registered with unlimited plays' });
 });
 
+
 // --- Competitive Arena API ---
 app.get('/api/competitive/status', (req, res) => {
     const room = rooms.get('competitive-1');
@@ -1867,6 +1879,29 @@ app.post('/api/competitive/enter', (req, res) => {
 app.post("/api/admin/reset-leaderboard", requireAdminKey, (req, res) => {    matchHistory = [];    matchNumber = 0;    fs.writeFileSync(HISTORY_FILE, "[]");    log.important("[Admin] Leaderboard reset");    res.json({ ok: true, message: "Leaderboard reset" });});
 app.get('/api/leaderboard/global', (req, res) => {
     res.json(leaderboardFromHistory());
+});
+
+app.get('/api/leaderboard/performance', (req, res) => {
+    // Filter for all performance arenas
+    const counts = {};
+    matchHistory.forEach(h => {
+        if (!h.arenaId || !h.arenaId.startsWith('performance')) return;
+        if (h.winner === 'No Winner' && h.score === 0) return;
+        const key = h.winner || 'No Winner';
+        counts[key] = (counts[key] || 0) + 1;
+    });
+    res.json(Object.entries(counts).map(([name, wins]) => ({ name, wins })).sort((a,b)=>b.wins-a.wins));
+});
+
+app.get('/api/leaderboard/competitive', (req, res) => {
+    const counts = {};
+    matchHistory.forEach(h => {
+        if (!h.arenaId || !h.arenaId.startsWith('competitive')) return;
+        if (h.winner === 'No Winner' && h.score === 0) return;
+        const key = h.winner || 'No Winner';
+        counts[key] = (counts[key] || 0) + 1;
+    });
+    res.json(Object.entries(counts).map(([name, wins]) => ({ name, wins })).sort((a,b)=>b.wins-a.wins));
 });
 
 app.get('/api/leaderboard/arena/:arenaId', (req, res) => {
