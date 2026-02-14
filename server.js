@@ -198,7 +198,7 @@ function stopBotWorker(botId, markStopped = true) {
     }
 }
 
-function startBotWorker(botId) {
+function startBotWorker(botId, overrideArenaId) {
     // Stop existing if any (don't mark as stopped since we're restarting)
     stopBotWorker(botId, false);
 
@@ -223,7 +223,7 @@ function startBotWorker(botId) {
         return;
     }
 
-    const arenaId = bot.preferredArenaId || 'performance-1';
+    const arenaId = overrideArenaId || bot.preferredArenaId || 'performance-1';
     log.important(`[Worker] Starting bot ${botId} for arena ${arenaId}`);
     const worker = new Worker(path.join(__dirname, 'sandbox-worker.js'), {
         workerData: {
@@ -464,15 +464,61 @@ class GameRoom {
             }
         }
 
-        // Auto-move for normal bots (no ws)
+        // Auto-move for bots without ws connection (wall-aware AI)
         Object.values(this.players).forEach((p) => {
-            if (p.botType === 'normal' && !p.ws) {
-                let dir = randomDirection();
-                // Avoid reversing direction
-                if (isOpposite(dir, p.direction)) {
-                    dir = randomDirection();
+            if (!p.ws && p.alive) {
+                const head = p.body[0];
+                const dirs = [
+                    { x: 1, y: 0 }, { x: -1, y: 0 },
+                    { x: 0, y: 1 }, { x: 0, y: -1 }
+                ];
+                
+                // Build danger set
+                const danger = new Set();
+                Object.values(this.players).forEach(other => {
+                    if (!other.body) return;
+                    other.body.forEach(seg => danger.add(seg.x + ',' + seg.y));
+                });
+                // Add solid obstacles
+                if (this.obstacles) {
+                    this.obstacles.forEach(obs => {
+                        if (obs.solid) danger.add(obs.x + ',' + obs.y);
+                    });
                 }
-                p.nextDirection = dir;
+                
+                // Find safe directions (not opposite, not wall, not body)
+                const safeDirs = dirs.filter(d => {
+                    if (isOpposite(d, p.direction)) return false;
+                    const nx = head.x + d.x;
+                    const ny = head.y + d.y;
+                    if (nx < 0 || nx >= CONFIG.gridSize || ny < 0 || ny >= CONFIG.gridSize) return false;
+                    if (danger.has(nx + ',' + ny)) return false;
+                    return true;
+                });
+                
+                if (safeDirs.length > 0) {
+                    // Prefer food direction if nearby
+                    let bestDir = safeDirs[Math.floor(Math.random() * safeDirs.length)];
+                    if (this.food.length > 0) {
+                        let minDist = Infinity;
+                        for (const d of safeDirs) {
+                            const nx = head.x + d.x;
+                            const ny = head.y + d.y;
+                            for (const f of this.food) {
+                                const dist = Math.abs(nx - f.x) + Math.abs(ny - f.y);
+                                if (dist < minDist) {
+                                    minDist = dist;
+                                    bestDir = d;
+                                }
+                            }
+                        }
+                    }
+                    p.nextDirection = bestDir;
+                } else {
+                    // No safe move, try any non-opposite
+                    const any = dirs.filter(d => !isOpposite(d, p.direction));
+                    p.nextDirection = any.length > 0 ? any[Math.floor(Math.random() * any.length)] : p.direction;
+                }
             }
         });
 
