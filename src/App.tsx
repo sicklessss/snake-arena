@@ -232,10 +232,11 @@ function BotPanel() {
         📋 {guideText}
         {copied && (
           <span style={{ 
-            position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)',
-            background: 'var(--neon-green)', color: '#000', padding: '2px 8px', borderRadius: '4px',
-            fontSize: '0.75rem', fontWeight: 'bold'
-          }}>Copied!</span>
+            position: 'absolute', right: 8, top: '-24px',
+            background: 'var(--neon-green)', color: '#000', padding: '3px 10px', borderRadius: '4px',
+            fontSize: '0.75rem', fontWeight: 'bold', pointerEvents: 'none',
+            boxShadow: '0 2px 8px rgba(0,255,136,0.4)',
+          }}>✅ Copied!</span>
         )}
       </div>
       <div style={{ display: 'flex', gap: '6px', marginTop: '8px', alignItems: 'center' }}>
@@ -500,14 +501,14 @@ function GameCanvas({
             ctx.shadowBlur = p.alive ? 8 : 0;
             ctx.globalAlpha = p.alive ? 1 : 0.4;
 
-            // Body with name letters
+            // Body with name letters (shown once, not looping)
             const pName = p.name || '';
             p.body.forEach((seg: any, i: number) => {
                 if (i === 0) return; 
                 ctx.fillRect(seg.x * cellSize + 1, seg.y * cellSize + 1, cellSize - 2, cellSize - 2);
-                // Draw letter on each body segment
-                const letterIdx = (i - 1) % pName.length;
-                if (pName[letterIdx]) {
+                // Draw letter on each body segment (only first pass of name)
+                const letterIdx = i - 1;
+                if (letterIdx < pName.length && pName[letterIdx]) {
                     ctx.save();
                     ctx.fillStyle = '#000';
                     ctx.shadowBlur = 0;
@@ -604,6 +605,27 @@ function App() {
   const [activePage, setActivePage] = useState<'performance' | 'competitive' | 'leaderboard'>('performance');
   const [competitiveMatchNumber, setCompetitiveMatchNumber] = useState(0);
 
+  // Throttle players update to prevent wallet modal from closing
+  const playersRef = useRef<any[]>([]);
+  const lastPlayersUpdate = useRef(0);
+  const throttledSetPlayers = useRef((p: any[]) => {
+    playersRef.current = p;
+    const now = Date.now();
+    if (now - lastPlayersUpdate.current > 500) {
+      lastPlayersUpdate.current = now;
+      setPlayers(p);
+    }
+  }).current;
+  
+  // Also throttle matchId
+  const matchIdRef = useRef<number | null>(null);
+  const throttledSetMatchId = useRef((id: number | null) => {
+    if (matchIdRef.current !== id) {
+      matchIdRef.current = id;
+      setMatchId(id);
+    }
+  }).current;
+
   useEffect(() => {
     const load = async () => {
       try {
@@ -696,8 +718,8 @@ function App() {
                 <GameCanvas 
                   key={activePage}
                   mode={activePage as any} 
-                  setMatchId={setMatchId} 
-                  setPlayers={setPlayers}
+                  setMatchId={throttledSetMatchId} 
+                  setPlayers={throttledSetPlayers}
                   setMatchNumber={isCompetitive ? setCompetitiveMatchNumber : undefined}
                 />
 
