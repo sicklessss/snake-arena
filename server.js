@@ -864,11 +864,10 @@ class GameRoom {
         if (deathType === 'eaten') {
             p.body = [p.body[0]];
         }
-        
-        // Competitive: convert dead snake body to obstacles
-        if (this.type === 'competitive' && p.body && p.body.length > 0 && deathType !== 'eaten') {
+
+        // Competitive arena: dead snake body becomes obstacles
+        if (this.type === 'competitive' && deathType !== 'eaten' && p.body && p.body.length > 0) {
             for (const seg of p.body) {
-                // Add as obstacle (already solid, no blink)
                 this.obstacles.push({
                     x: seg.x,
                     y: seg.y,
@@ -877,9 +876,9 @@ class GameRoom {
                     fromCorpse: true,
                 });
             }
-            // Remove food on those cells
-            const deadCells = new Set(p.body.map(s => s.x + ',' + s.y));
-            this.food = this.food.filter(f => !deadCells.has(f.x + ',' + f.y));
+            // Remove food that overlaps with new obstacles
+            this.food = this.food.filter(f => !p.body.some(seg => seg.x === f.x && seg.y === f.y));
+            log.info('[Competitive] Dead snake ' + p.name + ' body (' + p.body.length + ' cells) became obstacles');
         }
     }
 
@@ -1480,14 +1479,11 @@ function kickRandomNormal(room) {
 }
 
 function prepareRoomForAgentUpload(botId) {
-    // Prefer room with fewest agents (spread bots across rooms)
     let targetRoom = null;
-    let minAgents = Infinity;
     for (const room of performanceRooms) {
-        const agentCount = countAgentsInRoom(room);
-        if (agentCount < room.maxPlayers && agentCount < minAgents) {
-            minAgents = agentCount;
+        if (countAgentsInRoom(room) < room.maxPlayers) {
             targetRoom = room;
+            break;
         }
     }
 
