@@ -84,7 +84,7 @@ const CONTRACT_ABI = [
 
 // --- COMPONENTS ---
 
-function Betting({ matchId }: { matchId: number | null }) {
+function Prediction({ matchId }: { matchId: number | null }) {
   const { isConnected, address } = useAccount();
   const [botId, setBotId] = useState('');
   const [amount, setAmount] = useState('0.01');
@@ -93,8 +93,8 @@ function Betting({ matchId }: { matchId: number | null }) {
   const { writeContract, data: hash, error: writeError, isPending } = useWriteContract();
   const { isLoading: isConfirming, isSuccess: isConfirmed } = useWaitForTransactionReceipt({ hash });
 
-  const handleBet = async () => {
-    if (!matchId) return alert('No active match');
+  const handlePredict = async () => {
+    if (!matchId && matchId !== 0) return alert('No active match');
     if (!botId) return alert('Enter Bot ID');
     if (!isConnected) return alert('Connect Wallet');
     
@@ -103,7 +103,7 @@ function Betting({ matchId }: { matchId: number | null }) {
         address: CONTRACT_ADDRESS,
         abi: CONTRACT_ABI,
         functionName: 'placeBet',
-        args: [BigInt(matchId), botId],
+        args: [BigInt(matchId || 0), botId],
         value: parseEther(amount),
       });
     } catch (e: any) {
@@ -120,7 +120,7 @@ function Betting({ matchId }: { matchId: number | null }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ matchId, botId, amount, txHash: hash, bettor: address })
       }).then(res => res.json()).then(data => {
-        setStatus(data.ok ? '✅ Bet Placed' : '⚠️ Server Error');
+        setStatus(data.ok ? '✅ Prediction Placed' : '⚠️ Server Error');
       }).catch(() => setStatus('⚠️ Network Error'));
     }
     if (writeError) setStatus('Error: ' + writeError.message);
@@ -128,7 +128,7 @@ function Betting({ matchId }: { matchId: number | null }) {
 
   return (
     <div className="panel-card">
-      <div className="panel-row"><span>Match</span><span>{matchId ? `#${matchId}` : '--'}</span></div>
+      <div className="panel-row"><span>Match</span><span>{matchId !== null ? `#${matchId}` : '--'}</span></div>
       <input placeholder="Bot Name" value={botId} onChange={e => setBotId(e.target.value)} />
       <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
         {[0.001, 0.01, 0.1].map(val => (
@@ -136,22 +136,102 @@ function Betting({ matchId }: { matchId: number | null }) {
         ))}
       </div>
       <input placeholder="Custom Amount" value={amount} onChange={e => setAmount(e.target.value)} style={{ marginTop: '6px' }} />
-      <button onClick={handleBet} disabled={isPending || isConfirming} style={{ marginTop: '6px' }}>
-        {isPending ? 'Signing...' : isConfirming ? 'Confirming...' : 'Place Bet'}
+      <button onClick={handlePredict} disabled={isPending || isConfirming} style={{ marginTop: '6px' }}>
+        {isPending ? 'Signing...' : isConfirming ? 'Confirming...' : '🔮 Predict'}
       </button>
       <div className="muted" style={{ marginTop: '6px' }}>{status}</div>
     </div>
   );
 }
 
-function BotPanel({ mode: _mode }: { mode: 'performance' | 'competitive' }) {
+function BotPanel() {
+  const { isConnected } = useAccount();
   const [name, setName] = useState('');
+  const [copied, setCopied] = useState(false);
+  const [regStatus, setRegStatus] = useState('');
+  const { writeContract, data: regHash, isPending: regPending } = useWriteContract();
+  const { isLoading: regConfirming, isSuccess: regConfirmed } = useWaitForTransactionReceipt({ hash: regHash });
+
+  const guideText = 'read http://107.174.228.72:3000/SNAKE_GUIDE.md';
+  
+  const handleCopy = () => {
+    navigator.clipboard.writeText(guideText).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+
+  useEffect(() => {
+    if (regConfirmed && regHash && name) {
+      fetch('/api/bot/register-unlimited', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ botId: name, txHash: regHash })
+      }).then(r => r.json()).then(d => {
+        setRegStatus(d.ok ? '✅ Registered!' : '⚠️ ' + (d.error || 'Failed'));
+      }).catch(() => setRegStatus('⚠️ Error'));
+    }
+  }, [regConfirmed, regHash, name]);
+
+  const handleRegister = () => {
+    if (!isConnected) return alert('Connect Wallet');
+    if (!name) return alert('Enter Bot Name first');
+    try {
+      writeContract({
+        address: CONTRACT_ADDRESS,
+        abi: CONTRACT_ABI,
+        functionName: 'placeBet',
+        args: [BigInt(0), name],
+        value: parseEther('0.01'),
+      });
+    } catch (e: any) {
+      setRegStatus('Error: ' + e.message);
+    }
+  };
   
   return (
     <div className="panel-card">
-      <div className="muted">Copy instructions to your lobster to make a snake bot.</div>
-      <div className="muted">read http://107.174.228.72:3000/SNAKE_GUIDE.md</div>
-      <input placeholder="Bot Name" value={name} onChange={e => setName(e.target.value)} />
+      <div className="muted" style={{ marginBottom: '6px' }}>Click to copy instructions to your bot to make a snake bot and fight for you.</div>
+      <div 
+        className="copy-box" 
+        onClick={handleCopy}
+        style={{ 
+          cursor: 'pointer', 
+          padding: '10px', 
+          background: '#0d0d20', 
+          border: '1px solid var(--neon-blue)', 
+          borderRadius: '6px',
+          fontFamily: 'monospace',
+          fontSize: '0.85rem',
+          color: 'var(--neon-green)',
+          position: 'relative',
+          userSelect: 'none',
+          transition: 'border-color 0.2s',
+        }}
+      >
+        📋 {guideText}
+        {copied && (
+          <span style={{ 
+            position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)',
+            background: 'var(--neon-green)', color: '#000', padding: '2px 8px', borderRadius: '4px',
+            fontSize: '0.75rem', fontWeight: 'bold'
+          }}>Copied!</span>
+        )}
+      </div>
+      <div style={{ display: 'flex', gap: '6px', marginTop: '8px', alignItems: 'center' }}>
+        <input placeholder="Bot Name / ID" value={name} onChange={e => setName(e.target.value)} style={{ flex: 1 }} />
+        <button 
+          onClick={handleRegister} 
+          disabled={regPending || regConfirming}
+          style={{ 
+            width: 'auto', padding: '8px 12px', margin: 0,
+            background: 'var(--neon-pink)', fontSize: '0.75rem', whiteSpace: 'nowrap'
+          }}
+        >
+          {regPending ? '...' : regConfirming ? '⏳' : '💎 Register 0.01E'}
+        </button>
+      </div>
+      {regStatus && <div className="muted" style={{ marginTop: '4px' }}>{regStatus}</div>}
     </div>
   );
 }
@@ -388,10 +468,29 @@ function GameCanvas({
             ctx.shadowBlur = p.alive ? 8 : 0;
             ctx.globalAlpha = p.alive ? 1 : 0.4;
 
-            // Body
+            // Body with name letters
+            const pName = p.name || '';
             p.body.forEach((seg: any, i: number) => {
                 if (i === 0) return; 
                 ctx.fillRect(seg.x * cellSize + 1, seg.y * cellSize + 1, cellSize - 2, cellSize - 2);
+                // Draw letter on each body segment
+                const letterIdx = (i - 1) % pName.length;
+                if (pName[letterIdx]) {
+                    ctx.save();
+                    ctx.fillStyle = '#000';
+                    ctx.shadowBlur = 0;
+                    ctx.globalAlpha = p.alive ? 0.8 : 0.3;
+                    ctx.font = `bold ${Math.max(cellSize * 0.6, 8)}px Orbitron, monospace`;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(pName[letterIdx], seg.x * cellSize + cellSize/2, seg.y * cellSize + cellSize/2 + 1);
+                    ctx.restore();
+                    // Restore player color for next segment
+                    ctx.fillStyle = p.color || '#00ff88';
+                    ctx.shadowColor = p.color || '#00ff88';
+                    ctx.shadowBlur = p.alive ? 8 : 0;
+                    ctx.globalAlpha = p.alive ? 1 : 0.4;
+                }
             });
 
             // Head (triangle)
@@ -531,17 +630,15 @@ function App() {
                 <aside className="left-panel">
                   <div className="panel-section">
                     <h3>🤖 Bot Management</h3>
-                    <BotPanel mode={activePage as any} />
+                    <BotPanel />
                   </div>
-                  {isCompetitive && (
-                    <div className="panel-section">
-                      <h3>🎯 Arena Entry</h3>
-                      <CompetitiveEnter matchNumber={competitiveMatchNumber} />
-                    </div>
-                  )}
                   <div className="panel-section">
-                    <h3>🔮 Betting</h3>
-                    <Betting matchId={matchId} />
+                    <h3>🎯 Arena Entry</h3>
+                    <CompetitiveEnter matchNumber={competitiveMatchNumber} />
+                  </div>
+                  <div className="panel-section">
+                    <h3>🔮 Prediction</h3>
+                    <Prediction matchId={matchId} />
                   </div>
                 </aside>
 
