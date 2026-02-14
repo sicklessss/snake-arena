@@ -385,8 +385,30 @@ class GameRoom {
     }
 
     getSpawnPosition() {
-        const spawn = SPAWN_POINTS[this.spawnIndex % SPAWN_POINTS.length];
-        this.spawnIndex++;
+        // Collect occupied spawn positions
+        const occupied = new Set();
+        Object.values(this.players).forEach(p => {
+            if (p.body && p.body[0]) {
+                // Check if any spawn point is too close to this player's head
+                SPAWN_POINTS.forEach((sp, idx) => {
+                    const dist = Math.abs(sp.x - p.body[0].x) + Math.abs(sp.y - p.body[0].y);
+                    if (dist < 5) occupied.add(idx);
+                });
+            }
+        });
+        
+        // Get available spawn points
+        const available = SPAWN_POINTS.map((sp, idx) => idx).filter(idx => !occupied.has(idx));
+        
+        // Random selection from available, or fallback to any random
+        let spawnIdx;
+        if (available.length > 0) {
+            spawnIdx = available[Math.floor(Math.random() * available.length)];
+        } else {
+            spawnIdx = Math.floor(Math.random() * SPAWN_POINTS.length);
+        }
+        
+        const spawn = SPAWN_POINTS[spawnIdx];
         const body = [
             { x: spawn.x, y: spawn.y },
             { x: spawn.x - spawn.dir.x, y: spawn.y - spawn.dir.y },
