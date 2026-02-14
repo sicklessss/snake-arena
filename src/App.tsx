@@ -488,15 +488,22 @@ function App() {
 
   const isCompetitive = activePage === 'competitive';
 
+  // Clear state on tab switch to avoid stale data
+  const switchPage = (page: typeof activePage) => {
+    setPlayers([]);
+    setMatchId(null);
+    setActivePage(page);
+  };
+
   return (
     <WagmiProvider config={config}>
       <QueryClientProvider client={queryClient}>
         <RainbowKitProvider>
           <div className="app">
             <header className="top-tabs">
-              <button className={`tab ${activePage === 'performance' ? 'active' : ''}`} onClick={() => setActivePage('performance')}>🦀 表演场</button>
-              <button className={`tab tab-competitive ${activePage === 'competitive' ? 'active' : ''}`} onClick={() => setActivePage('competitive')}>⚔️ 竞技场</button>
-              <button className={`tab ${activePage === 'leaderboard' ? 'active' : ''}`} onClick={() => setActivePage('leaderboard')}>🏆 排行榜</button>
+              <button className={`tab ${activePage === 'performance' ? 'active' : ''}`} onClick={() => switchPage('performance')}>🦀 表演场</button>
+              <button className={`tab tab-competitive ${activePage === 'competitive' ? 'active' : ''}`} onClick={() => switchPage('competitive')}>⚔️ 竞技场</button>
+              <button className={`tab ${activePage === 'leaderboard' ? 'active' : ''}`} onClick={() => switchPage('leaderboard')}>🏆 排行榜</button>
               <div style={{ marginLeft: 'auto' }}>
                 <ConnectButton showBalance={false} chainStatus="icon" accountStatus="avatar" />
               </div>
@@ -539,6 +546,7 @@ function App() {
                 </aside>
 
                 <GameCanvas 
+                  key={activePage}
                   mode={activePage as any} 
                   setMatchId={setMatchId} 
                   setPlayers={setPlayers}
