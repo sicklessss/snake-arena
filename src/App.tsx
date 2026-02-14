@@ -12,7 +12,7 @@ import './index.css';
 // --- CONFIG ---
 const config = getDefaultConfig({
   appName: 'Snake Arena',
-  projectId: 'YOUR_PROJECT_ID', // Replaced with a placeholder or public one if available
+  projectId: 'YOUR_PROJECT_ID',
   chains: [baseSepolia],
   ssr: false, 
 });
@@ -21,20 +21,10 @@ const queryClient = new QueryClient();
 
 // --- CONTRACT ---
 const CONTRACT_ADDRESS = "0xAf077e41644529AF966EBC9B49849c94cDf80EE2";
-const RULES_TEXT = `游戏介绍
+
+const PERFORMANCE_RULES = `游戏介绍
 
 Snake Arena 是一个实时多人贪吃蛇竞技场，玩家或AI bot在同一张地图中比拼生存与吞噬。
-
-为什么能赚钱
-- 观众可以对比赛下注
-- bot 开发者可以卖 bot 订阅/使用权（可选）
-
-如何加入
-1) 观看：直接打开网页观看比赛
-2) 参赛：上传 bot 脚本并加入房间
-3) 下注：连接钱包，选择 bot 与金额
-
----
 
 规则概览
 
@@ -47,23 +37,36 @@ Snake Arena 是一个实时多人贪吃蛇竞技场，玩家或AI bot在同一�
 2) 出生与移动
 - 固定出生点，初始长度=3
 - 不能立刻反向
-- 普通Bot无WS会随机移动
 
-3) 生长
-- 吃到食物：+1长度，+1分
-- 没吃到：尾巴缩一格保持长度
-
-4) 死亡
+3) 死亡
 - 撞墙 / 自撞 / 撞尸体：死亡
 
-5) 蛇对蛇
+4) 蛇对蛇
 - 头对头：更长者生存；同长同死
-- 头撞到别人身体：更长者“吃掉”对方一段；更短者死亡
+- 头撞到别人身体：更长者"吃掉"对方一段；更短者死亡
 
-6) 胜负
-- 仅剩1条：胜
-- 全灭：No Winner
-- 时间到：存活且最长者胜
+5) 胜负
+- 仅剩1条：胜 | 全灭：No Winner | 时间到：最长者胜
+`;
+
+const COMPETITIVE_RULES = `⚔️ 竞技场规则
+
+竞技场是高级赛场，只有已注册的 Agent Bot 才能参赛。
+
+与表演场的不同：
+🧱 障碍物系统
+- 比赛期间每10秒随机生成障碍物（1×1 ~ 4×4 不规则形状）
+- 障碍物生成时闪烁2秒（黄色闪烁），此时可以穿越
+- 闪烁结束后变为实体障碍（红色），蛇撞上即死
+
+💰 进场机制
+- 默认：系统随机从已注册 Agent Bot 中挑选上场
+- 付费进场：支付 0.001 ETH 可选择指定场次上场
+- 付费进场的 bot 该场结束后回到随机挑选状态
+
+📋 基础规则同表演场
+- 15秒赛前准备 → 3分钟比赛 → 30秒休息
+- 30×30 地图 | 125ms/tick | 食物上限5个
 `;
 
 const CONTRACT_ABI = [
@@ -88,10 +91,7 @@ function Betting({ matchId }: { matchId: number | null }) {
   const [status, setStatus] = useState('');
   
   const { writeContract, data: hash, error: writeError, isPending } = useWriteContract();
-  
-  const { isLoading: isConfirming, isSuccess: isConfirmed } = useWaitForTransactionReceipt({
-    hash,
-  });
+  const { isLoading: isConfirming, isSuccess: isConfirmed } = useWaitForTransactionReceipt({ hash });
 
   const handleBet = async () => {
     if (!matchId) return alert('No active match');
@@ -118,13 +118,7 @@ function Betting({ matchId }: { matchId: number | null }) {
       fetch('/api/bet/place', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          matchId,
-          botId,
-          amount,
-          txHash: hash,
-          bettor: address
-        })
+        body: JSON.stringify({ matchId, botId, amount, txHash: hash, bettor: address })
       }).then(res => res.json()).then(data => {
         setStatus(data.ok ? '✅ Bet Placed' : '⚠️ Server Error');
       }).catch(() => setStatus('⚠️ Network Error'));
@@ -141,12 +135,7 @@ function Betting({ matchId }: { matchId: number | null }) {
           <button key={val} onClick={() => setAmount(val.toString())} style={{ flex: 1 }}>{val}E</button>
         ))}
       </div>
-      <input 
-        placeholder="Custom Amount" 
-        value={amount} 
-        onChange={e => setAmount(e.target.value)} 
-        style={{ marginTop: '6px' }}
-      />
+      <input placeholder="Custom Amount" value={amount} onChange={e => setAmount(e.target.value)} style={{ marginTop: '6px' }} />
       <button onClick={handleBet} disabled={isPending || isConfirming} style={{ marginTop: '6px' }}>
         {isPending ? 'Signing...' : isConfirming ? 'Confirming...' : 'Place Bet'}
       </button>
@@ -155,7 +144,7 @@ function Betting({ matchId }: { matchId: number | null }) {
   );
 }
 
-function BotPanel() {
+function BotPanel({ mode: _mode }: { mode: 'performance' | 'competitive' }) {
   const [name, setName] = useState('');
   
   return (
@@ -167,7 +156,77 @@ function BotPanel() {
   );
 }
 
-function GameCanvas({ setMatchId, setPlayers }: { setMatchId: (id: number | null) => void, setPlayers: (players: any[]) => void }) {
+function CompetitiveEnter({ matchNumber }: { matchNumber: number }) {
+  const { isConnected } = useAccount();
+  const [botId, setBotId] = useState('');
+  const [targetMatch, setTargetMatch] = useState('');
+  const [status, setStatus] = useState('');
+  const { writeContract, data: hash, isPending } = useWriteContract();
+  const { isLoading: isConfirming, isSuccess: isConfirmed } = useWaitForTransactionReceipt({ hash });
+
+  useEffect(() => {
+    if (isConfirmed && hash) {
+      setStatus('⏳ Confirming entry...');
+      fetch('/api/competitive/enter', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ botId, matchNumber: parseInt(targetMatch), txHash: hash })
+      }).then(r => r.json()).then(data => {
+        setStatus(data.ok ? '✅ Entry confirmed for match #' + targetMatch : '⚠️ ' + (data.error || 'Failed'));
+      }).catch(() => setStatus('⚠️ Network Error'));
+    }
+  }, [isConfirmed, hash, botId, targetMatch]);
+
+  const handleEnter = () => {
+    if (!isConnected) return alert('Connect Wallet');
+    if (!botId) return alert('Enter Bot ID');
+    const mn = parseInt(targetMatch);
+    if (!mn || mn < matchNumber) return alert('Match number must be >= current match #' + matchNumber);
+    
+    try {
+      writeContract({
+        address: CONTRACT_ADDRESS,
+        abi: CONTRACT_ABI,
+        functionName: 'placeBet',
+        args: [BigInt(0), botId],
+        value: parseEther('0.001'),
+      });
+    } catch (e: any) {
+      setStatus('Error: ' + e.message);
+    }
+  };
+
+  return (
+    <div className="panel-card">
+      <div className="panel-row"><span>Current Match</span><span>#{matchNumber}</span></div>
+      <input placeholder="Bot ID (e.g. bot_xxx)" value={botId} onChange={e => setBotId(e.target.value)} />
+      <input 
+        placeholder={`Target Match # (>= ${matchNumber})`}
+        value={targetMatch} 
+        onChange={e => setTargetMatch(e.target.value)} 
+        style={{ marginTop: '6px' }}
+        type="number"
+      />
+      <div className="muted" style={{ marginTop: '4px' }}>Cost: 0.001 ETH per entry</div>
+      <button onClick={handleEnter} disabled={isPending || isConfirming} style={{ marginTop: '6px' }}>
+        {isPending ? 'Signing...' : isConfirming ? 'Confirming...' : '🎯 Enter Arena'}
+      </button>
+      {status && <div className="muted" style={{ marginTop: '6px' }}>{status}</div>}
+    </div>
+  );
+}
+
+function GameCanvas({ 
+  mode, 
+  setMatchId, 
+  setPlayers, 
+  setMatchNumber 
+}: { 
+  mode: 'performance' | 'competitive';
+  setMatchId: (id: number | null) => void;
+  setPlayers: (players: any[]) => void;
+  setMatchNumber?: (n: number) => void;
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [status, setStatus] = useState('Connecting...');
   const [overlay, setOverlay] = useState<React.ReactNode>(null);
@@ -177,8 +236,11 @@ function GameCanvas({ setMatchId, setPlayers }: { setMatchId: (id: number | null
   const [selectedRoom, setSelectedRoom] = useState(1);
   const [roomCount, setRoomCount] = useState(1);
 
-  // Fetch room count periodically
+  const isCompetitive = mode === 'competitive';
+
+  // Fetch room count for performance mode
   useEffect(() => {
+    if (isCompetitive) return;
     const fetchRooms = async () => {
       try {
         const res = await fetch('/api/arena/status');
@@ -189,11 +251,12 @@ function GameCanvas({ setMatchId, setPlayers }: { setMatchId: (id: number | null
     fetchRooms();
     const t = setInterval(fetchRooms, 5000);
     return () => clearInterval(t);
-  }, []);
+  }, [isCompetitive]);
 
   useEffect(() => {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const wsUrl = `${proto}://${window.location.host}?arenaId=performance-${selectedRoom}`; 
+    const arenaId = isCompetitive ? 'competitive-1' : `performance-${selectedRoom}`;
+    const wsUrl = `${proto}://${window.location.host}?arenaId=${arenaId}`; 
     
     let ws: WebSocket;
     
@@ -211,7 +274,10 @@ function GameCanvas({ setMatchId, setPlayers }: { setMatchId: (id: number | null
 
     const render = (state: any) => {
         setMatchId(state.matchId);
-        setMatchInfo('MATCH #' + (state.matchId || '?'));
+        if (state.matchNumber && setMatchNumber) {
+          setMatchNumber(state.matchNumber);
+        }
+        setMatchInfo((isCompetitive ? '⚔️ COMPETITIVE ' : '') + 'MATCH #' + (state.matchId || '?'));
         const alivePlayers = state.players || [];
         const waitingPlayers = (state.waitingPlayers || []).map((p: any) => ({ ...p, waiting: true }));
         setPlayers([...alivePlayers, ...waitingPlayers]);
@@ -254,12 +320,52 @@ function GameCanvas({ setMatchId, setPlayers }: { setMatchId: (id: number | null
         ctx.fillStyle = '#000';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         
-        // Grid
-        ctx.strokeStyle = '#1a1a2e';
+        // Grid - slightly different color for competitive
+        ctx.strokeStyle = isCompetitive ? '#1a1020' : '#1a1a2e';
         ctx.lineWidth = 0.5;
         for (let i = 0; i <= 30; i++) {
             ctx.beginPath(); ctx.moveTo(i*cellSize, 0); ctx.lineTo(i*cellSize, canvas.height); ctx.stroke();
             ctx.beginPath(); ctx.moveTo(0, i*cellSize); ctx.lineTo(canvas.width, i*cellSize); ctx.stroke();
+        }
+
+        // Obstacles (competitive mode)
+        if (state.obstacles && state.obstacles.length > 0) {
+            for (const obs of state.obstacles) {
+                if (obs.solid) {
+                    // Solid obstacle - dark red
+                    ctx.fillStyle = '#8b0000';
+                    ctx.shadowColor = '#ff0000';
+                    ctx.shadowBlur = 4;
+                    ctx.fillRect(obs.x * cellSize, obs.y * cellSize, cellSize, cellSize);
+                    ctx.shadowBlur = 0;
+                    // Draw X pattern
+                    ctx.strokeStyle = '#ff4444';
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    ctx.moveTo(obs.x * cellSize + 2, obs.y * cellSize + 2);
+                    ctx.lineTo((obs.x + 1) * cellSize - 2, (obs.y + 1) * cellSize - 2);
+                    ctx.moveTo((obs.x + 1) * cellSize - 2, obs.y * cellSize + 2);
+                    ctx.lineTo(obs.x * cellSize + 2, (obs.y + 1) * cellSize - 2);
+                    ctx.stroke();
+                } else {
+                    // Blinking obstacle - yellow flashing
+                    const blink = Math.floor(Date.now() / 200) % 2 === 0;
+                    if (blink) {
+                        ctx.fillStyle = 'rgba(255, 200, 0, 0.6)';
+                        ctx.shadowColor = '#ffcc00';
+                        ctx.shadowBlur = 8;
+                        ctx.fillRect(obs.x * cellSize, obs.y * cellSize, cellSize, cellSize);
+                        ctx.shadowBlur = 0;
+                    } else {
+                        ctx.fillStyle = 'rgba(255, 200, 0, 0.2)';
+                        ctx.fillRect(obs.x * cellSize, obs.y * cellSize, cellSize, cellSize);
+                    }
+                    // Warning border
+                    ctx.strokeStyle = 'rgba(255, 200, 0, 0.8)';
+                    ctx.lineWidth = 1;
+                    ctx.strokeRect(obs.x * cellSize, obs.y * cellSize, cellSize, cellSize);
+                }
+            }
         }
 
         // Food
@@ -274,7 +380,6 @@ function GameCanvas({ setMatchId, setPlayers }: { setMatchId: (id: number | null
         (state.players || []).forEach((p: any) => {
             if (!p.body || p.body.length === 0) return;
             
-            // Dead/Blink
             const isBlinking = !p.alive && p.blinking;
             if (isBlinking && Math.floor(Date.now() / 500) % 2 === 0) return;
 
@@ -289,7 +394,7 @@ function GameCanvas({ setMatchId, setPlayers }: { setMatchId: (id: number | null
                 ctx.fillRect(seg.x * cellSize + 1, seg.y * cellSize + 1, cellSize - 2, cellSize - 2);
             });
 
-            // Head
+            // Head (triangle)
             const head = p.body[0];
             const dir = p.direction || {x:1, y:0};
             const cx = head.x * cellSize + cellSize/2;
@@ -323,32 +428,38 @@ function GameCanvas({ setMatchId, setPlayers }: { setMatchId: (id: number | null
     };
 
     return () => { if (ws) ws.close(); };
-  }, [setMatchId, setPlayers, selectedRoom]);
+  }, [setMatchId, setPlayers, selectedRoom, isCompetitive, setMatchNumber]);
+
+  const borderColor = isCompetitive ? 'var(--neon-pink)' : 'var(--neon-blue)';
 
   return (
     <div className="main-stage">
-        <h1>🦀 SNAKE ARENA {selectedRoom}
-          <span className="room-selector">
-            {[1,2,3,4,5,6].map(n => (
-              <button 
-                key={n} 
-                className={`room-btn ${selectedRoom === n ? 'active' : ''} ${n > roomCount ? 'disabled' : ''}`}
-                onClick={() => n <= roomCount && setSelectedRoom(n)}
-                disabled={n > roomCount}
-              >{n}</button>
-            ))}
-          </span>
-        </h1>
+        {isCompetitive ? (
+          <h1 style={{ color: 'var(--neon-pink)', textShadow: '0 0 10px rgba(255,0,85,0.5)' }}>⚔️ COMPETITIVE ARENA</h1>
+        ) : (
+          <h1>🦀 SNAKE ARENA {selectedRoom}
+            <span className="room-selector">
+              {[1,2,3,4,5,6].map(n => (
+                <button 
+                  key={n} 
+                  className={`room-btn ${selectedRoom === n ? 'active' : ''} ${n > roomCount ? 'disabled' : ''}`}
+                  onClick={() => n <= roomCount && setSelectedRoom(n)}
+                  disabled={n > roomCount}
+                >{n}</button>
+              ))}
+            </span>
+          </h1>
+        )}
         <div className="match-info">{matchInfo}</div>
         <div className="timer" style={{ color: timerColor }}>{timer}</div>
         <div className="canvas-wrap">
-          <canvas ref={canvasRef} width={600} height={600} style={{ border: '4px solid var(--neon-blue)', background: '#000', maxWidth: '90%', maxHeight: '70vh' }}></canvas>
+          <canvas ref={canvasRef} width={600} height={600} style={{ border: `4px solid ${borderColor}`, background: '#000', maxWidth: '90%', maxHeight: '70vh' }}></canvas>
           <div id="overlay">{overlay}</div>
         </div>
         <div className="status-bar">{status}</div>
         <div className="rules-wrap">
-          <h3>📜 游戏规则</h3>
-          <div className="rules-box">{RULES_TEXT}</div>
+          <h3>📜 {isCompetitive ? '竞技场规则' : '游戏规则'}</h3>
+          <div className="rules-box">{isCompetitive ? COMPETITIVE_RULES : PERFORMANCE_RULES}</div>
         </div>
     </div>
   );
@@ -358,7 +469,8 @@ function App() {
   const [matchId, setMatchId] = useState<number | null>(null);
   const [players, setPlayers] = useState<any[]>([]);
   const [leaderboard, setLeaderboard] = useState<any[]>([]);
-  const [mobilePage, setMobilePage] = useState<'main' | 'stats'>('main');
+  const [activePage, setActivePage] = useState<'performance' | 'competitive' | 'leaderboard'>('performance');
+  const [competitiveMatchNumber, setCompetitiveMatchNumber] = useState(1);
 
   useEffect(() => {
     const load = async () => {
@@ -374,59 +486,91 @@ function App() {
     return () => clearInterval(t);
   }, []);
 
+  const isCompetitive = activePage === 'competitive';
+
   return (
     <WagmiProvider config={config}>
       <QueryClientProvider client={queryClient}>
         <RainbowKitProvider>
           <div className="app">
             <header className="top-tabs">
-              <button className={`tab ${mobilePage === 'main' ? 'active' : ''}`} onClick={() => setMobilePage('main')}>主面板</button>
-              <button className={`tab ${mobilePage === 'stats' ? 'active' : ''}`} onClick={() => setMobilePage('stats')}>排行榜</button>
+              <button className={`tab ${activePage === 'performance' ? 'active' : ''}`} onClick={() => setActivePage('performance')}>🦀 表演场</button>
+              <button className={`tab tab-competitive ${activePage === 'competitive' ? 'active' : ''}`} onClick={() => setActivePage('competitive')}>⚔️ 竞技场</button>
+              <button className={`tab ${activePage === 'leaderboard' ? 'active' : ''}`} onClick={() => setActivePage('leaderboard')}>🏆 排行榜</button>
               <div style={{ marginLeft: 'auto' }}>
                 <ConnectButton showBalance={false} chainStatus="icon" accountStatus="avatar" />
               </div>
             </header>
 
-            <div className={`content ${mobilePage === 'stats' ? 'mobile-stats' : 'mobile-main'}`}>
-              <aside className="left-panel">
-                <div className="panel-section">
-                  <h3>🤖 Bot Management</h3>
-                  <BotPanel />
-                </div>
-                <div className="panel-section">
-                  <h3>🔮 Betting</h3>
-                  <Betting matchId={matchId} />
-                </div>
-              </aside>
-
-              <GameCanvas setMatchId={setMatchId} setPlayers={setPlayers} />
-
-              <aside className="right-panel">
-                <div className="panel-section">
-                  <h3>⚔️ Fighters</h3>
+            {activePage === 'leaderboard' ? (
+              <div className="leaderboard-page">
+                <div className="panel-section" style={{ maxWidth: 600, margin: '0 auto', padding: 24 }}>
+                  <h2 style={{ color: 'var(--neon-green)', textAlign: 'center' }}>🏆 Global Leaderboard</h2>
                   <ul className="fighter-list">
-                    {players.sort((a, b) => (b.body?.length || 0) - (a.body?.length || 0)).map((p, i) => (
-                      <li key={i} className={`fighter-item ${p.waiting ? 'alive' : (p.alive ? 'alive' : 'dead')}`}>
-                        <span className="fighter-name" style={{ color: p.color }}>{p.name}{p.waiting ? ' (waiting)' : ''}</span>
-                        <span className="fighter-length">{p.body?.length || 0} {p.waiting ? '⏳' : (p.alive ? '🐍' : '💀')}</span>
+                    {leaderboard.map((p: any, i: number) => (
+                      <li key={i} className="fighter-item alive">
+                        <span className="fighter-name">
+                          {i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i+1}`} {p.name}
+                        </span>
+                        <span className="fighter-length">{p.wins}W</span>
                       </li>
                     ))}
+                    {leaderboard.length === 0 && <li className="fighter-item"><span className="muted">No data yet</span></li>}
                   </ul>
                 </div>
-                <div className="panel-section">
-                    <h3>🏆 Leaderboard</h3>
+              </div>
+            ) : (
+              <div className={`content`}>
+                <aside className="left-panel">
+                  <div className="panel-section">
+                    <h3>🤖 Bot Management</h3>
+                    <BotPanel mode={activePage as any} />
+                  </div>
+                  {isCompetitive && (
+                    <div className="panel-section">
+                      <h3>🎯 Arena Entry</h3>
+                      <CompetitiveEnter matchNumber={competitiveMatchNumber} />
+                    </div>
+                  )}
+                  <div className="panel-section">
+                    <h3>🔮 Betting</h3>
+                    <Betting matchId={matchId} />
+                  </div>
+                </aside>
+
+                <GameCanvas 
+                  mode={activePage as any} 
+                  setMatchId={setMatchId} 
+                  setPlayers={setPlayers}
+                  setMatchNumber={isCompetitive ? setCompetitiveMatchNumber : undefined}
+                />
+
+                <aside className="right-panel">
+                  <div className="panel-section">
+                    <h3>⚔️ Fighters</h3>
                     <ul className="fighter-list">
-                      {leaderboard.map((p: any, i: number) => (
-                        <li key={i} className="fighter-item">
-                          <span className="fighter-name">{p.name}</span>
-                          <span className="fighter-length">{p.wins}W</span>
+                      {players.sort((a, b) => (b.body?.length || 0) - (a.body?.length || 0)).map((p, i) => (
+                        <li key={i} className={`fighter-item ${p.waiting ? 'alive' : (p.alive ? 'alive' : 'dead')}`}>
+                          <span className="fighter-name" style={{ color: p.color }}>{p.name}{p.waiting ? ' (waiting)' : ''}</span>
+                          <span className="fighter-length">{p.body?.length || 0} {p.waiting ? '⏳' : (p.alive ? '🐍' : '💀')}</span>
                         </li>
                       ))}
                     </ul>
-                </div>
-
-              </aside>
-            </div>
+                  </div>
+                  <div className="panel-section">
+                      <h3>🏆 Leaderboard</h3>
+                      <ul className="fighter-list">
+                        {leaderboard.slice(0, 10).map((p: any, i: number) => (
+                          <li key={i} className="fighter-item">
+                            <span className="fighter-name">{p.name}</span>
+                            <span className="fighter-length">{p.wins}W</span>
+                          </li>
+                        ))}
+                      </ul>
+                  </div>
+                </aside>
+              </div>
+            )}
           </div>
         </RainbowKitProvider>
       </QueryClientProvider>
