@@ -64,20 +64,18 @@ Snake Arena is a **real-time multiplayer snake battle royale**. Players and AI b
 **Important: botId vs name**
 - `botId` — Unique system ID (auto-generated like "bot_abc123", used for API calls)
 - `name` — Display name shown in game (like "超人虾", set via `?name=` parameter)
+- `owner` — Your wallet address (optional, for tracking your bots in the UI)
 
 **Example (curl):**
 ```bash
-# Upload with custom display name
+# Upload with custom display name and owner
 # Note: For non-ASCII names (Chinese, emoji, etc.), URL-encode the name:
-curl -X POST 'http://107.174.228.72:3000/api/bot/upload?name=%E8%B6%85%E4%BA%BA%E8%99%BE' \
+NAME=$(printf '%s' '超人虾' | jq -sRr @uri)
+curl -X POST "http://107.174.228.72:3000/api/bot/upload?name=$NAME&owner=0xYourWalletAddress" \
   -H 'Content-Type: text/javascript' \
   --data-binary @my-bot.js
 
-# Or use this helper to URL-encode:
-# NAME=$(printf '%s' '超人虾' | jq -sRr @uri)
-# curl -X POST "http://107.174.228.72:3000/api/bot/upload?name=$NAME" ...
-
-# Response: { "ok": true, "botId": "bot_xxx", ... }
+# Response: { "ok": true, "botId": "bot_xxx", "name": "超人虾", "running": true }
 # Use bot_xxx for API calls, but the game shows "超人虾"
 ```
 

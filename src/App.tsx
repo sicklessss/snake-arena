@@ -15,7 +15,7 @@ const queryClient = new QueryClient();
 
 function stringToBytes32(str: string): `0x${string}` { return stringToHex(str.padEnd(32, '\0').slice(0, 32), { size: 32 }); }
 
-// Original Bot Panel with Register/Sell logic
+// Original Bot Panel with Register/Sell logic + User Bots List
 function BotPanel() {
   const { isConnected, address } = useAccount();
   const [name, setName] = useState('');
@@ -26,6 +26,10 @@ function BotPanel() {
   const [loading, setLoading] = useState(false);
   const [showSell, setShowSell] = useState(false);
   const [sellPrice, setSellPrice] = useState('');
+  
+  // User's bots list
+  const [userBots, setUserBots] = useState<any[]>([]);
+  const [loadingUserBots, setLoadingUserBots] = useState(false);
   
   const { writeContract: registerBot, data: regHash, isPending: regPending } = useWriteContract();
   const { writeContract: listForSale, data: sellHash, isPending: sellPending } = useWriteContract();
@@ -39,6 +43,26 @@ function BotPanel() {
   useEffect(() => {
     fetch('/api/bot/registration-fee').then(r => r.json()).then(d => d.fee && setRegFee(d.fee)).catch(() => {});
   }, []);
+
+  // Fetch user's bots when connected
+  useEffect(() => {
+    if (!address) { setUserBots([]); return; }
+    const fetchUserBots = async () => {
+      setLoadingUserBots(true);
+      try {
+        const res = await fetch(`/api/user/bots?address=${address}`);
+        if (res.ok) {
+          const data = await res.json();
+          setUserBots(data.bots || []);
+        }
+      } catch (e) {}
+      setLoadingUserBots(false);
+    };
+    fetchUserBots();
+    // Refresh every 10 seconds
+    const interval = setInterval(fetchUserBots, 10000);
+    return () => clearInterval(interval);
+  }, [address]);
 
   // Fetch bot info when name changes
   useEffect(() => {
@@ -244,6 +268,55 @@ function BotPanel() {
             <button onClick={() => setShowSell(false)} style={{ flex: 1, fontSize: '0.75rem' }}>Cancel</button>
             <button onClick={handleSell} disabled={sellPending} style={{ flex: 1, fontSize: '0.75rem' }}>{sellPending ? 'Listing...' : 'List for Sale'}</button>
           </div>
+        </div>
+      )}
+      
+      {/* User's Bots List */}
+      {isConnected && userBots.length > 0 && (
+        <div style={{ marginTop: '16px', padding: '12px', background: '#0d0d20', borderRadius: '8px', border: '1px solid #333' }}>
+          <div style={{ fontSize: '0.8rem', color: '#888', marginBottom: '8px' }}>📋 Your Uploaded Bots</div>
+          {userBots.map((bot) => (
+            <div 
+              key={bot.botId}
+              onClick={() => setName(bot.name)}
+              style={{ 
+                display: 'flex', 
+                alignItems: 'center', 
+                gap: '8px', 
+                padding: '8px', 
+                marginBottom: '6px',
+                background: name === bot.name ? 'rgba(0,255,136,0.1)' : '#1a1a2e',
+                border: name === bot.name ? '1px solid var(--neon-green)' : '1px solid transparent',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                transition: 'all 0.2s'
+              }}
+            >
+              <span style={{ fontSize: '0.85rem', flex: 1 }}>{bot.name}</span>
+              <span style={{ fontSize: '0.7rem', color: '#666' }}>{bot.botId}</span>
+              <span style={{ 
+                fontSize: '0.7rem', 
+                color: bot.running ? 'var(--neon-green)' : '#888',
+                padding: '2px 6px',
+                background: bot.running ? 'rgba(0,255,136,0.1)' : '#222',
+                borderRadius: '4px'
+              }}>
+                {bot.running ? '● Running' : '○ Stopped'}
+              </span>
+            </div>
+          ))}
+          <div style={{ fontSize: '0.7rem', color: '#666', marginTop: '4px' }}>Click a bot to select</div>
+        </div>
+      )}
+      
+      {isConnected && loadingUserBots && userBots.length === 0 && (
+        <div style={{ marginTop: '16px', textAlign: 'center', color: '#666', fontSize: '0.8rem' }}>Loading your bots...</div>
+      )}
+      
+      {isConnected && !loadingUserBots && userBots.length === 0 && (
+        <div style={{ marginTop: '16px', padding: '12px', background: '#0d0d20', borderRadius: '8px', border: '1px dashed #333', textAlign: 'center' }}>
+          <div style={{ fontSize: '0.8rem', color: '#666' }}>No bots uploaded yet</div>
+          <div style={{ fontSize: '0.7rem', color: '#444', marginTop: '4px' }}>Upload a bot to see it here</div>
         </div>
       )}
     </div>
