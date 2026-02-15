@@ -123,7 +123,7 @@ function BotPanel() {
   };
   
   const isOwner = botInfo?.owner?.toLowerCase() === address?.toLowerCase();
-  const showRegister = botInfo && !botInfo.registered;
+  const showRegister = name && (!botInfo || !botInfo.registered);
   const showSellButton = botInfo && botInfo.registered && isOwner && !botInfo.forSale;
   const showCancelSell = botInfo && botInfo.registered && isOwner && botInfo.forSale;
 
