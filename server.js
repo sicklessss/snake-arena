@@ -1,3 +1,5 @@
+require('dotenv').config();
+
 const WebSocket = require('ws');
 const express = require('express');
 const http = require('http');
@@ -1785,6 +1787,19 @@ app.get('/api/bot/lookup', (req, res) => {
     const entry = Object.entries(botRegistry).find(([_, m]) => m.name === name.toString());
     if (!entry) return res.status(404).json({ error: 'bot_not_found' });
     res.json({ botId: entry[0], name: entry[1].name, credits: entry[1].credits });
+});
+
+// Get registration fee - MUST be before /api/bot/:botId
+app.get('/api/bot/registration-fee', async (req, res) => {
+    try {
+        if (!botRegistryContract) {
+            return res.status(503).json({ error: 'contracts_not_initialized' });
+        }
+        const fee = await botRegistryContract.registrationFee();
+        res.json({ fee: ethers.formatEther(fee), feeWei: fee.toString() });
+    } catch (e) {
+        res.status(500).json({ error: 'query_failed', message: e.message });
+    }
 });
 
 app.get('/api/bot/:botId', (req, res) => {
