@@ -273,19 +273,50 @@ function MarketplaceCard({ bot, onSuccess }: { bot: any; onSuccess: () => void }
   );
 }
 
-function Prediction({ matchId }: { matchId: number | null }) {
+function Prediction({ matchId: propMatchId }: { matchId: number | null }) {
   const { isConnected, address } = useAccount();
+  const [matchId, setMatchId] = useState<string>(propMatchId?.toString() || '');
   const [botId, setBotId] = useState('');
   const [amount, setAmount] = useState('0.01');
   const [status, setStatus] = useState('');
   const { writeContract, data: hash, error: writeError, isPending } = useWriteContract();
   const { isLoading: isConfirming, isSuccess: isConfirmed } = useWaitForTransactionReceipt({ hash });
 
+  // Update matchId when prop changes
+  useEffect(() => {
+    if (propMatchId !== null && propMatchId !== undefined) {
+      setMatchId(propMatchId.toString());
+    }
+  }, [propMatchId]);
+
   const handlePredict = async () => {
-    if (!matchId && matchId !== 0) return alert('No active match');
+    const matchIdNum = parseInt(matchId);
+    if (!matchId || isNaN(matchIdNum)) return alert('Enter valid Match ID');
     if (!botId) return alert('Enter Bot ID');
     if (!isConnected) return alert('Connect Wallet');
-    try { writeContract({ address: CONTRACTS.pariMutuel as `0x${string}`, abi: PARI_MUTUEL_ABI, functionName: 'placeBet', args: [BigInt(matchId || 0), stringToBytes32(botId)], value: parseEther(amount) }); }
+    
+    // Check if match exists first
+    try {
+      const res = await fetch(`/api/bet/check-match?matchId=${matchIdNum}`);
+      if (!res.ok) {
+        const err = await res.json();
+        setStatus('⚠️ ' + (err.error || 'Match not available for betting'));
+        return;
+      }
+    } catch (e) {
+      // Continue anyway, contract will reject if invalid
+    }
+    
+    try { 
+      writeContract({ 
+        address: CONTRACTS.pariMutuel as `0x${string}`, 
+        abi: PARI_MUTUEL_ABI, 
+        functionName: 'placeBet', 
+        args: [BigInt(matchIdNum), stringToHex(botId.padEnd(32, '\0').slice(0, 32), { size: 32 })], 
+        value: parseEther(amount),
+        gas: BigInt(300000) // Explicit gas limit
+      }); 
+    }
     catch (e: any) { setStatus('Error: ' + e.message); }
   };
 
@@ -293,15 +324,32 @@ function Prediction({ matchId }: { matchId: number | null }) {
     if (isConfirming) setStatus('Confirming...');
     if (isConfirmed && hash) {
       setStatus('Confirmed! notifying server...');
-      fetch('/api/bet/place', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ matchId, botId, amount, txHash: hash, bettor: address }) })
+      const matchIdNum = parseInt(matchId);
+      fetch('/api/bet/place', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ matchId: matchIdNum, botId, amount, txHash: hash, bettor: address }) })
         .then(res => res.json()).then(data => { setStatus(data.ok ? '✅ Prediction Placed' : '⚠️ Server Error'); }).catch(() => setStatus('⚠️ Network Error'));
     }
-    if (writeError) setStatus('Error: ' + writeError.message);
+    if (writeError) {
+      const errorMsg = writeError.message || '';
+      if (errorMsg.includes('gas limit')) {
+        setStatus('⚠️ Match not available or betting closed');
+      } else {
+        setStatus('Error: ' + errorMsg);
+      }
+    }
   }, [isConfirming, isConfirmed, writeError, hash, matchId, botId, amount, address]);
 
   return (
     <div className="panel-card">
-      <div className="panel-row"><span>Match</span><span>{matchId !== null ? `#${matchId}` : '--'}</span></div>
+      <div className="panel-row">
+        <span>Match</span>
+        <input 
+          type="number" 
+          value={matchId} 
+          onChange={e => setMatchId(e.target.value)}
+          placeholder="#"
+          style={{ width: '60px', textAlign: 'right' }}
+        />
+      </div>
       <input placeholder="Bot Name" value={botId} onChange={e => setBotId(e.target.value)} />
       <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
         {[0.001, 0.01, 0.1].map(val => <button key={val} onClick={() => setAmount(val.toString())} style={{ flex: 1 }}>{val}E</button>)}
@@ -316,11 +364,18 @@ function Prediction({ matchId }: { matchId: number | null }) {
 function CompetitiveEnter({ matchNumber }: { matchNumber: number }) {
   const { isConnected } = useAccount();
   const [botName, setBotName] = useState('');
-  const [targetMatch, setTargetMatch] = useState('');
+  const [targetMatch, setTargetMatch] = useState<string>('');
   const [status, setStatus] = useState('');
   const [resolvedBotId, setResolvedBotId] = useState('');
   const { writeContract, data: hash, isPending } = useWriteContract();
   const { isLoading: isConfirming, isSuccess: isConfirmed } = useWaitForTransactionReceipt({ hash });
+
+  // Auto-update target match when current match changes
+  useEffect(() => {
+    if (matchNumber > 0) {
+      setTargetMatch(matchNumber.toString());
+    }
+  }, [matchNumber]);
 
   useEffect(() => {
     if (isConfirmed && hash && resolvedBotId) {
@@ -341,13 +396,13 @@ function CompetitiveEnter({ matchNumber }: { matchNumber: number }) {
       if (!res.ok) { const err = await res.json(); setStatus('⚠️ ' + (err.error === 'bot_not_found' ? 'Bot "' + botName + '" not found' : err.error)); return; }
       const data = await res.json();
       setResolvedBotId(data.botId);
-      writeContract({ address: CONTRACTS.pariMutuel as `0x${string}`, abi: PARI_MUTUEL_ABI, functionName: 'placeBet', args: [BigInt(0), stringToBytes32(data.botId)], value: parseEther('0.001') });
+      writeContract({ address: CONTRACTS.pariMutuel as `0x${string}`, abi: PARI_MUTUEL_ABI, functionName: 'placeBet', args: [BigInt(0), stringToHex(data.botId.padEnd(32, '\0').slice(0, 32), { size: 32 })], value: parseEther('0.001') });
     } catch (e: any) { setStatus('Error: ' + e.message); }
   };
 
   return (
     <div className="panel-card">
-      <div className="panel-row"><span>Current Match</span><span>#{matchNumber}</span></div>
+      <div className="panel-row"><span>Current Match</span><span style={{ color: 'var(--neon-green)', fontWeight: 'bold' }}>#{matchNumber}</span></div>
       <input placeholder="Bot Name" value={botName} onChange={e => setBotName(e.target.value)} />
       <input placeholder={`Target Match # (>= ${matchNumber})`} value={targetMatch} onChange={e => setTargetMatch(e.target.value)} style={{ marginTop: '6px' }} type="number" />
       <div className="muted" style={{ marginTop: '4px' }}>Cost: 0.001 ETH per entry</div>
