@@ -2021,6 +2021,9 @@ app.post('/api/bot/upload', rateLimit({ windowMs: 60_000, max: 10 }), async (req
             }
         }
 
+        // Get owner from query (optional, for tracking who uploaded)
+        const owner = req.query.owner?.toString().toLowerCase() || null;
+
         // 3. Resolve Bot ID
         let targetBotId = botId;
         if (!targetBotId) {
@@ -2031,7 +2034,8 @@ app.post('/api/bot/upload', rateLimit({ windowMs: 60_000, max: 10 }), async (req
                 name: (name || 'Bot-' + targetBotId.substr(-4)).toString().slice(0, 32),
                 credits: 99999,
                 botType: 'agent',
-                createdAt: Date.now()
+                createdAt: Date.now(),
+                owner: owner
             };
         } else if (!botRegistry[targetBotId]) {
             return res.status(404).json({ error: 'bot_not_found' });
@@ -2044,6 +2048,8 @@ app.post('/api/bot/upload', rateLimit({ windowMs: 60_000, max: 10 }), async (req
         botRegistry[targetBotId].scriptPath = scriptPath;
         // Update name if provided
         if (name) botRegistry[targetBotId].name = name.toString().slice(0, 32);
+        // Update owner if provided and not already set
+        if (owner && !botRegistry[targetBotId].owner) botRegistry[targetBotId].owner = owner;
         saveBotRegistry();
 
         // 4. Create bot on-chain (if new bot)
@@ -2071,7 +2077,14 @@ app.post('/api/bot/upload', rateLimit({ windowMs: 60_000, max: 10 }), async (req
         // 4. Auto-start bot (restart if already running, start if new)
         startBotWorker(targetBotId);
 
-        res.json({ ok: true, botId: targetBotId, message: 'Bot uploaded and started successfully.' });
+        res.json({ 
+            ok: true, 
+            botId: targetBotId, 
+            name: botRegistry[targetBotId].name,
+            owner: botRegistry[targetBotId].owner,
+            running: botRegistry[targetBotId].running || false,
+            message: 'Bot uploaded and started successfully.' 
+        });
     } catch (e) {
         console.error(e);
         res.status(500).json({ error: 'upload_failed' });
@@ -2096,6 +2109,31 @@ app.post('/api/bot/stop', requireAdminKey, (req, res) => {
     
     stopBotWorker(botId);
     res.json({ ok: true, message: 'Bot stopped' });
+});
+
+// Get user's bots (by owner address)
+app.get('/api/user/bots', (req, res) => {
+    const { address } = req.query;
+    if (!address) {
+        return res.status(400).json({ error: 'Missing address parameter' });
+    }
+    
+    const normalizedAddress = address.toString().toLowerCase();
+    
+    // Find all bots owned by this address
+    const userBots = Object.entries(botRegistry)
+        .filter(([id, bot]) => bot.owner?.toLowerCase() === normalizedAddress)
+        .map(([id, bot]) => ({
+            botId: id,
+            name: bot.name,
+            credits: bot.credits,
+            running: bot.running || false,
+            botType: bot.botType || 'agent',
+            createdAt: bot.createdAt,
+            preferredArenaId: bot.preferredArenaId || null
+        }));
+    
+    res.json({ ok: true, bots: userBots, count: userBots.length });
 });
 
 // --- Betting (MVP, in-memory) ---

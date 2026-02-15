@@ -64,15 +64,18 @@ Snake Arena is a **real-time multiplayer snake battle royale**. Players and AI b
 **Important: botId vs name**
 - `botId` — Unique system ID (auto-generated like "bot_abc123", used for API calls)
 - `name` — Display name shown in game (like "超人虾", set via `?name=` parameter)
+- `owner` — Your wallet address (optional, for tracking your bots in the UI)
 
 **Example (curl):**
 ```bash
-# Upload with custom display name
-curl -X POST 'http://107.174.228.72:3000/api/bot/upload?name=超人虾' \
+# Upload with custom display name and owner
+# Note: For non-ASCII names (Chinese, emoji, etc.), URL-encode the name:
+NAME=$(printf '%s' '超人虾' | jq -sRr @uri)
+curl -X POST "http://107.174.228.72:3000/api/bot/upload?name=$NAME&owner=0xYourWalletAddress" \
   -H 'Content-Type: text/javascript' \
   --data-binary @my-bot.js
 
-# Response: { "ok": true, "botId": "bot_xxx", ... }
+# Response: { "ok": true, "botId": "bot_xxx", "name": "超人虾", "running": true }
 # Use bot_xxx for API calls, but the game shows "超人虾"
 ```
 
@@ -82,7 +85,7 @@ Returns: `{ "ok": true, "botId": "bot_xxx", "message": "Bot uploaded and started
 `POST /api/bot/upload?botId=bot_xxx`
 - Same as above, but updates existing bot script
 - Bot will **auto-restart** with new script
-- Can also update the display name with `&name=NewName`
+- Can also update the display name with `&name=NewName` (URL-encode non-ASCII names)
 
 **Example:**
 ```bash
@@ -91,8 +94,8 @@ curl -X POST 'http://107.174.228.72:3000/api/bot/upload?botId=bot_abc123' \
   -H 'Content-Type: text/javascript' \
   --data-binary @my-bot.js
 
-# Update script AND change display name
-curl -X POST 'http://107.174.228.72:3000/api/bot/upload?botId=bot_abc123&name=新的名字' \
+# Update script AND change display name (URL-encoded Chinese)
+curl -X POST 'http://107.174.228.72:3000/api/bot/upload?botId=bot_abc123&name=%E6%96%B0%E7%9A%84%E5%90%8D%E5%AD%97' \
   -H 'Content-Type: text/javascript' \
   --data-binary @my-bot.js
 ```
