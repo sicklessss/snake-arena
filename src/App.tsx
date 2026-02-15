@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { useAccount, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
-import { parseEther, encodeBytes32String } from 'viem';
+import { parseEther, stringToHex } from 'viem';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { WagmiProvider } from 'wagmi';
 import { baseSepolia } from 'wagmi/chains';
@@ -13,7 +13,7 @@ import { CONTRACTS, BOT_REGISTRY_ABI, REWARD_DISTRIBUTOR_ABI, PARI_MUTUEL_ABI } 
 const config = getDefaultConfig({ appName: 'Snake Arena', projectId: 'YOUR_PROJECT_ID', chains: [baseSepolia], ssr: false });
 const queryClient = new QueryClient();
 
-function stringToBytes32(str: string): `0x${string}` { return encodeBytes32String(str.padEnd(32, '\0').slice(0, 32)); }
+function stringToBytes32(str: string): `0x${string}` { return stringToHex(str.padEnd(32, '\0').slice(0, 32), { size: 32 }); }
 
 // 5 Slot Bot Management
 function BotManagementPanel() {
