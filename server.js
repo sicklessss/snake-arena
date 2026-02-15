@@ -6,6 +6,55 @@ const fs = require('fs');
 const bodyParser = require('body-parser');
 const { Worker } = require('worker_threads');
 
+// --- Blockchain Config ---
+const { ethers } = require('ethers');
+
+// Contract addresses (to be updated after deployment)
+const CONTRACTS = {
+    botRegistry: process.env.BOT_REGISTRY_CONTRACT || '0x303FC17a0a849d0aB5Ca9b6C0c78916014f23D1c',
+    rewardDistributor: process.env.REWARD_DISTRIBUTOR_CONTRACT || '0xD419fE00b20f472132A5B3E803962Ae4fd962d4B',
+    pariMutuel: process.env.PARIMUTUEL_CONTRACT || '0x01C38985C826c8D16E057d7d590Da0A37947fed7'
+};
+
+// Backend wallet for creating bots on-chain
+const provider = new ethers.JsonRpcProvider('https://sepolia.base.org');
+const backendWallet = process.env.BACKEND_PRIVATE_KEY 
+    ? new ethers.Wallet(process.env.BACKEND_PRIVATE_KEY, provider)
+    : null;
+
+// Contract ABIs (simplified)
+const BOT_REGISTRY_ABI = [
+    "function createBot(bytes32 _botId, string calldata _botName, address _creator) external",
+    "function bots(bytes32) external view returns (bytes32 botId, string memory botName, address owner, bool registered, uint256 registeredAt, uint256 matchesPlayed, uint256 totalEarnings, uint256 salePrice)",
+    "function getBotById(bytes32 _botId) external view returns (tuple(bytes32 botId, string botName, address owner, bool registered, uint256 registeredAt, uint256 matchesPlayed, uint256 totalEarnings, uint256 salePrice))",
+    "function getOwnerBots(address _owner) external view returns (bytes32[] memory)",
+    "function getBotsForSale(uint256 _offset, uint256 _limit) external view returns (tuple(bytes32 botId, string botName, address owner, bool registered, uint256 registeredAt, uint256 matchesPlayed, uint256 totalEarnings, uint256 salePrice)[] memory)",
+    "function registrationFee() external view returns (uint256)",
+    "event BotCreated(bytes32 indexed botId, string botName, address indexed creator)",
+    "event BotRegistered(bytes32 indexed botId, address indexed owner, uint256 fee)"
+];
+
+const REWARD_DISTRIBUTOR_ABI = [
+    "function pendingRewards(bytes32) external view returns (uint256)",
+    "function claimRewards(bytes32 _botId) external",
+    "function claimRewardsBatch(bytes32[] calldata _botIds) external",
+    "function MIN_CLAIM_THRESHOLD() external view returns (uint256)"
+];
+
+// Initialize contracts
+let botRegistryContract = null;
+let rewardDistributorContract = null;
+
+function initContracts() {
+    if (backendWallet && CONTRACTS.botRegistry !== '0x0000000000000000000000000000000000000000') {
+        botRegistryContract = new ethers.Contract(CONTRACTS.botRegistry, BOT_REGISTRY_ABI, backendWallet);
+        rewardDistributorContract = new ethers.Contract(CONTRACTS.rewardDistributor, REWARD_DISTRIBUTOR_ABI, provider);
+        log.important(`[Blockchain] Contracts initialized. Registry: ${CONTRACTS.botRegistry}`);
+    } else {
+        log.warn('[Blockchain] Contracts not initialized - set env vars or deploy contracts');
+    }
+}
+
 // --- Logging Config ---
 const LOG_LEVEL = process.env.LOG_LEVEL || 'info'; // 'debug' | 'info' | 'warn' | 'error'
 const LOG_LEVELS = { debug: 0, info: 1, warn: 2, error: 3 };
@@ -1982,6 +2031,23 @@ app.post('/api/bot/upload', rateLimit({ windowMs: 60_000, max: 10 }), async (req
         if (name) botRegistry[targetBotId].name = name.toString().slice(0, 32);
         saveBotRegistry();
 
+        // 4. Create bot on-chain (if new bot)
+        if (botRegistryContract && !botId) {
+            try {
+                const botName = botRegistry[targetBotId].name;
+                const tx = await botRegistryContract.createBot(
+                    ethers.encodeBytes32String(targetBotId),
+                    botName,
+                    ethers.ZeroAddress // Initially unclaimed
+                );
+                await tx.wait();
+                log.important(`[Blockchain] Bot ${targetBotId} created on-chain`);
+            } catch (chainErr) {
+                log.warn('[Blockchain] Failed to create bot on-chain:', chainErr.message);
+                // Non-blocking: bot still works locally even if chain fails
+            }
+        }
+
         // Auto-assign/kick rule: each uploaded agent bot kicks one normal bot
         if ((botRegistry[targetBotId].botType || 'agent') === 'agent') {
             prepareRoomForAgentUpload(targetBotId);
@@ -2105,9 +2171,134 @@ app.get('/api/replay/:matchId', (req, res) => {
 
 app.get('/history', (req, res) => res.json(matchHistory));
 
+// --- NEW: Blockchain Integration APIs ---
+
+// Get on-chain bot info
+app.get('/api/bot/onchain/:botId', async (req, res) => {
+    try {
+        const { botId } = req.params;
+        if (!botRegistryContract) {
+            return res.status(503).json({ error: 'contracts_not_initialized' });
+        }
+        
+        const bot = await botRegistryContract.getBotById(ethers.encodeBytes32String(botId));
+        res.json({
+            botId: bot.botId,
+            botName: bot.botName,
+            owner: bot.owner,
+            registered: bot.registered,
+            registeredAt: Number(bot.registeredAt) * 1000,
+            matchesPlayed: Number(bot.matchesPlayed),
+            totalEarnings: ethers.formatEther(bot.totalEarnings),
+            salePrice: ethers.formatEther(bot.salePrice),
+            forSale: bot.salePrice > 0
+        });
+    } catch (e) {
+        log.error('[API] /api/bot/onchain error:', e.message);
+        res.status(500).json({ error: 'query_failed', message: e.message });
+    }
+});
+
+// Get user's on-chain bots
+app.get('/api/user/onchain-bots', async (req, res) => {
+    try {
+        const { wallet } = req.query;
+        if (!wallet || !ethers.isAddress(wallet)) {
+            return res.status(400).json({ error: 'invalid_wallet_address' });
+        }
+        if (!botRegistryContract) {
+            return res.status(503).json({ error: 'contracts_not_initialized' });
+        }
+        
+        const botIds = await botRegistryContract.getOwnerBots(wallet);
+        const bots = await Promise.all(
+            botIds.map(async (id) => {
+                const bot = await botRegistryContract.getBotById(id);
+                return {
+                    botId: ethers.decodeBytes32String(id).replace(/\0/g, ''),
+                    botName: bot.botName,
+                    registered: bot.registered,
+                    salePrice: ethers.formatEther(bot.salePrice),
+                    forSale: bot.salePrice > 0,
+                    matchesPlayed: Number(bot.matchesPlayed),
+                    totalEarnings: ethers.formatEther(bot.totalEarnings)
+                };
+            })
+        );
+        res.json({ bots });
+    } catch (e) {
+        log.error('[API] /api/user/onchain-bots error:', e.message);
+        res.status(500).json({ error: 'query_failed', message: e.message });
+    }
+});
+
+// Get marketplace listings
+app.get('/api/marketplace/listings', async (req, res) => {
+    try {
+        const { offset = 0, limit = 20 } = req.query;
+        if (!botRegistryContract) {
+            return res.status(503).json({ error: 'contracts_not_initialized' });
+        }
+        
+        const listings = await botRegistryContract.getBotsForSale(offset, limit);
+        const formatted = listings.map(bot => ({
+            botId: ethers.decodeBytes32String(bot.botId).replace(/\0/g, ''),
+            botName: bot.botName,
+            owner: bot.owner,
+            registered: bot.registered,
+            matchesPlayed: Number(bot.matchesPlayed),
+            totalEarnings: ethers.formatEther(bot.totalEarnings),
+            price: ethers.formatEther(bot.salePrice),
+            priceWei: bot.salePrice.toString()
+        }));
+        res.json({ listings: formatted });
+    } catch (e) {
+        log.error('[API] /api/marketplace/listings error:', e.message);
+        res.status(500).json({ error: 'query_failed', message: e.message });
+    }
+});
+
+// Get pending rewards for a bot
+app.get('/api/bot/rewards/:botId', async (req, res) => {
+    try {
+        const { botId } = req.params;
+        if (!rewardDistributorContract) {
+            return res.status(503).json({ error: 'contracts_not_initialized' });
+        }
+        
+        const pending = await rewardDistributorContract.pendingRewards(ethers.encodeBytes32String(botId));
+        const threshold = await rewardDistributorContract.MIN_CLAIM_THRESHOLD();
+        
+        res.json({
+            botId,
+            pendingRewards: ethers.formatEther(pending),
+            canClaim: pending >= threshold,
+            threshold: ethers.formatEther(threshold)
+        });
+    } catch (e) {
+        log.error('[API] /api/bot/rewards error:', e.message);
+        res.status(500).json({ error: 'query_failed', message: e.message });
+    }
+});
+
+// Get registration fee
+app.get('/api/bot/registration-fee', async (req, res) => {
+    try {
+        if (!botRegistryContract) {
+            return res.status(503).json({ error: 'contracts_not_initialized' });
+        }
+        const fee = await botRegistryContract.registrationFee();
+        res.json({ fee: ethers.formatEther(fee), feeWei: fee.toString() });
+    } catch (e) {
+        res.status(500).json({ error: 'query_failed', message: e.message });
+    }
+});
+
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
     log.important(`🚀 Snake Arena running on port ${PORT}`);
+    // Initialize blockchain contracts
+    initContracts();
     // Resume bots after a short delay (let rooms initialize)
     setTimeout(resumeRunningBots, 3000);
 });

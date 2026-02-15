@@ -1,0 +1,143 @@
+[
+  {
+    "inputs": [],
+    "name": "registrationFee",
+    "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "MAX_BOTS_PER_USER",
+    "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [{"internalType": "bytes32", "name": "_botId", "type": "bytes32"}],
+    "name": "bots",
+    "outputs": [
+      {"internalType": "bytes32", "name": "botId", "type": "bytes32"},
+      {"internalType": "string", "name": "botName", "type": "string"},
+      {"internalType": "address", "name": "owner", "type": "address"},
+      {"internalType": "bool", "name": "registered", "type": "bool"},
+      {"internalType": "uint256", "name": "registeredAt", "type": "uint256"},
+      {"internalType": "uint256", "name": "matchesPlayed", "type": "uint256"},
+      {"internalType": "uint256", "name": "totalEarnings", "type": "uint256"},
+      {"internalType": "uint256", "name": "salePrice", "type": "uint256"}
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [{"internalType": "bytes32", "name": "_botId", "type": "bytes32"}],
+    "name": "registerBot",
+    "outputs": [],
+    "stateMutability": "payable",
+    "type": "function"
+  },
+  {
+    "inputs": [{"internalType": "bytes32", "name": "_botId", "type": "bytes32"}, {"internalType": "uint256", "name": "_price", "type": "uint256"}],
+    "name": "listForSale",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [{"internalType": "bytes32", "name": "_botId", "type": "bytes32"}],
+    "name": "cancelSale",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [{"internalType": "bytes32", "name": "_botId", "type": "bytes32"}],
+    "name": "buyBot",
+    "outputs": [],
+    "stateMutability": "payable",
+    "type": "function"
+  },
+  {
+    "inputs": [{"internalType": "bytes32", "name": "_botId", "type": "bytes32"}],
+    "name": "getBotById",
+    "outputs": [
+      {
+        "components": [
+          {"internalType": "bytes32", "name": "botId", "type": "bytes32"},
+          {"internalType": "string", "name": "botName", "type": "string"},
+          {"internalType": "address", "name": "owner", "type": "address"},
+          {"internalType": "bool", "name": "registered", "type": "bool"},
+          {"internalType": "uint256", "name": "registeredAt", "type": "uint256"},
+          {"internalType": "uint256", "name": "matchesPlayed", "type": "uint256"},
+          {"internalType": "uint256", "name": "totalEarnings", "type": "uint256"},
+          {"internalType": "uint256", "name": "salePrice", "type": "uint256"}
+        ],
+        "internalType": "struct BotRegistry.Bot",
+        "name": "",
+        "type": "tuple"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [{"internalType": "address", "name": "_owner", "type": "address"}],
+    "name": "getOwnerBots",
+    "outputs": [{"internalType": "bytes32[]", "name": "", "type": "bytes32[]"}],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [{"internalType": "uint256", "name": "_offset", "type": "uint256"}, {"internalType": "uint256", "name": "_limit", "type": "uint256"}],
+    "name": "getBotsForSale",
+    "outputs": [
+      {
+        "components": [
+          {"internalType": "bytes32", "name": "botId", "type": "bytes32"},
+          {"internalType": "string", "name": "botName", "type": "string"},
+          {"internalType": "address", "name": "owner", "type": "address"},
+          {"internalType": "bool", "name": "registered", "type": "bool"},
+          {"internalType": "uint256", "name": "registeredAt", "type": "uint256"},
+          {"internalType": "uint256", "name": "matchesPlayed", "type": "uint256"},
+          {"internalType": "uint256", "name": "totalEarnings", "type": "uint256"},
+          {"internalType": "uint256", "name": "salePrice", "type": "uint256"}
+        ],
+        "internalType": "struct BotRegistry.Bot[]",
+        "name": "",
+        "type": "tuple[]"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {"indexed": true, "internalType": "bytes32", "name": "botId", "type": "bytes32"},
+      {"indexed": true, "internalType": "address", "name": "owner", "type": "address"},
+      {"indexed": false, "internalType": "uint256", "name": "fee", "type": "uint256"}
+    ],
+    "name": "BotRegistered",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {"indexed": true, "internalType": "bytes32", "name": "botId", "type": "bytes32"},
+      {"indexed": false, "internalType": "uint256", "name": "price", "type": "uint256"}
+    ],
+    "name": "BotListedForSale",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {"indexed": true, "internalType": "bytes32", "name": "botId", "type": "bytes32"},
+      {"indexed": true, "internalType": "address", "name": "seller", "type": "address"},
+      {"indexed": true, "internalType": "address", "name": "buyer", "type": "address"},
+      {"indexed": false, "internalType": "uint256", "name": "price", "type": "uint256"}
+    ],
+    "name": "BotSold",
+    "type": "event"
+  }
+]
