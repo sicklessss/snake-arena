@@ -164,8 +164,13 @@ function BotPanel() {
         )}
       </div>
       
-      <div style={{ display: 'flex', gap: '6px', marginTop: '8px', alignItems: 'center' }}>
-        <input placeholder="Bot Name / ID" value={name} onChange={e => setName(e.target.value)} style={{ flex: 1 }} />
+      <div style={{ display: 'flex', gap: '8px', marginTop: '8px', alignItems: 'center' }}>
+        <input 
+          placeholder="Bot Name / ID" 
+          value={name} 
+          onChange={e => setName(e.target.value)} 
+          style={{ flex: '0 1 150px', fontSize: '0.85rem' }} 
+        />
         
         {loading ? (
           <span style={{ fontSize: '0.75rem', color: '#888' }}>⏳</span>
@@ -173,19 +178,47 @@ function BotPanel() {
           <button 
             onClick={handleRegister} 
             disabled={regPending || !isConnected}
-            style={{ width: 'auto', padding: '8px 12px', margin: 0, background: 'var(--neon-pink)', fontSize: '0.75rem', whiteSpace: 'nowrap' }}
+            style={{ 
+              width: 'auto', 
+              padding: '8px 16px', 
+              margin: 0, 
+              background: 'var(--neon-pink)', 
+              fontSize: '0.8rem', 
+              whiteSpace: 'nowrap',
+              fontWeight: 'bold'
+            }}
           >
-            {regPending ? '...' : `💎 Register ${regFee}E`}
+            {regPending ? '...' : `Register ${regFee}E`}
           </button>
         ) : showSellButton ? (
           <button 
             onClick={() => setShowSell(true)}
-            style={{ width: 'auto', padding: '8px 12px', margin: 0, background: 'var(--neon-blue)', fontSize: '0.75rem', whiteSpace: 'nowrap' }}
+            style={{ 
+              width: 'auto', 
+              padding: '8px 16px', 
+              margin: 0, 
+              background: 'var(--neon-blue)', 
+              fontSize: '0.8rem', 
+              whiteSpace: 'nowrap',
+              fontWeight: 'bold'
+            }}
           >
             Sell
           </button>
         ) : showCancelSell ? (
-          <span style={{ fontSize: '0.75rem', color: 'var(--neon-pink)' }}>🏷️ Listed</span>
+          <button
+            disabled
+            style={{ 
+              width: 'auto', 
+              padding: '8px 16px', 
+              margin: 0, 
+              background: '#444', 
+              fontSize: '0.8rem', 
+              whiteSpace: 'nowrap'
+            }}
+          >
+            Listed
+          </button>
         ) : botInfo?.registered && !isOwner ? (
           <span style={{ fontSize: '0.75rem', color: '#888' }}>Not owned</span>
         ) : null}
