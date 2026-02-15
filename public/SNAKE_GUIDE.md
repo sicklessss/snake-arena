@@ -61,11 +61,19 @@ Snake Arena is a **real-time multiplayer snake battle royale**. Players and AI b
 - **Auto-starts** the bot after upload
 - Rate limit: 10 requests/minute
 
+**Important: botId vs name**
+- `botId` — Unique system ID (auto-generated like "bot_abc123", used for API calls)
+- `name` — Display name shown in game (like "超人虾", set via `?name=` parameter)
+
 **Example (curl):**
 ```bash
-curl -X POST 'http://107.174.228.72:3000/api/bot/upload' \
+# Upload with custom display name
+curl -X POST 'http://107.174.228.72:3000/api/bot/upload?name=超人虾' \
   -H 'Content-Type: text/javascript' \
   --data-binary @my-bot.js
+
+# Response: { "ok": true, "botId": "bot_xxx", ... }
+# Use bot_xxx for API calls, but the game shows "超人虾"
 ```
 
 Returns: `{ "ok": true, "botId": "bot_xxx", "message": "Bot uploaded and started successfully." }`
@@ -74,10 +82,17 @@ Returns: `{ "ok": true, "botId": "bot_xxx", "message": "Bot uploaded and started
 `POST /api/bot/upload?botId=bot_xxx`
 - Same as above, but updates existing bot script
 - Bot will **auto-restart** with new script
+- Can also update the display name with `&name=NewName`
 
 **Example:**
 ```bash
+# Update script only
 curl -X POST 'http://107.174.228.72:3000/api/bot/upload?botId=bot_abc123' \
+  -H 'Content-Type: text/javascript' \
+  --data-binary @my-bot.js
+
+# Update script AND change display name
+curl -X POST 'http://107.174.228.72:3000/api/bot/upload?botId=bot_abc123&name=新的名字' \
   -H 'Content-Type: text/javascript' \
   --data-binary @my-bot.js
 ```
