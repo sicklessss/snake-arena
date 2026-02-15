@@ -15,156 +15,201 @@ const queryClient = new QueryClient();
 
 function stringToBytes32(str: string): `0x${string}` { return stringToHex(str.padEnd(32, '\0').slice(0, 32), { size: 32 }); }
 
-// 5 Slot Bot Management
-function BotManagementPanel() {
-  const { address } = useAccount();
-  const [slots, setSlots] = useState<any[]>([]);
-  const [loading, setLoading] = useState(false);
-
-  useEffect(() => { setSlots(Array.from({ length: 5 }, (_, i) => ({ id: i + 1, botId: null, botName: null, registered: false, owner: null, forSale: false, price: '0', pendingRewards: '0', canClaim: false }))); }, []);
-
-  const fetchUserBots = useCallback(async () => {
-    if (!address) return;
-    setLoading(true);
-    try {
-      const res = await fetch(`/api/user/onchain-bots?wallet=${address}`);
-      if (!res.ok) throw new Error('Failed');
-      const data = await res.json();
-      const newSlots = Array.from({ length: 5 }, (_, i) => {
-        const bot = data.bots?.[i];
-        if (!bot) return { id: i + 1, botId: null, botName: null, registered: false, owner: null, forSale: false, price: '0', pendingRewards: '0', canClaim: false };
-        return { id: i + 1, botId: bot.botId, botName: bot.botName, registered: bot.registered, owner: address, forSale: bot.forSale, price: bot.salePrice || '0', pendingRewards: '0', canClaim: false };
-      });
-      for (let i = 0; i < newSlots.length; i++) {
-        if (newSlots[i].botId) {
-          try {
-            const rewardRes = await fetch(`/api/bot/rewards/${newSlots[i].botId}`);
-            if (rewardRes.ok) {
-              const rewardData = await rewardRes.json();
-              newSlots[i].pendingRewards = rewardData.pendingRewards;
-              newSlots[i].canClaim = rewardData.canClaim;
-            }
-          } catch (e) {}
-        }
-      }
-      setSlots(newSlots);
-    } catch (e) {}
-    setLoading(false);
-  }, [address]);
-
-  useEffect(() => { fetchUserBots(); const interval = setInterval(fetchUserBots, 30000); return () => clearInterval(interval); }, [fetchUserBots]);
-
-  return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-        <h3>🤖 My Bots ({slots.filter((s: any) => s.botId).length}/5)</h3>
-        {address && <button onClick={fetchUserBots} disabled={loading} style={{ fontSize: '0.75rem', padding: '4px 8px' }}>{loading ? '⟳' : '↻ Refresh'}</button>}
-      </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-        {slots.map((slot) => <BotSlotCard key={slot.id} slot={slot} refresh={fetchUserBots} />)}
-      </div>
-    </div>
-  );
-}
-
-function BotSlotCard({ slot, refresh }: { slot: any; refresh: () => void }) {
-  const { isConnected } = useAccount();
-  const [showUpload, setShowUpload] = useState(false);
-  const [showSell, setShowSell] = useState(false);
+// Original Bot Panel with Register/Sell logic
+function BotPanel() {
+  const { isConnected, address } = useAccount();
+  const [name, setName] = useState('');
+  const [copied, setCopied] = useState(false);
   const [regStatus, setRegStatus] = useState('');
   const [regFee, setRegFee] = useState('0.01');
+  const [botInfo, setBotInfo] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const [showSell, setShowSell] = useState(false);
   const [sellPrice, setSellPrice] = useState('');
-  const [uploadName, setUploadName] = useState('');
-  const [uploadCode, setUploadCode] = useState('');
-  const [uploading, setUploading] = useState(false);
-
+  
   const { writeContract: registerBot, data: regHash, isPending: regPending } = useWriteContract();
   const { writeContract: listForSale, data: sellHash, isPending: sellPending } = useWriteContract();
   const { writeContract: claimRewards, isPending: claimPending } = useWriteContract();
   const { isSuccess: regConfirmed } = useWaitForTransactionReceipt({ hash: regHash });
   const { isSuccess: sellConfirmed } = useWaitForTransactionReceipt({ hash: sellHash });
 
-  useEffect(() => { fetch('/api/bot/registration-fee').then(r => r.json()).then(d => d.fee && setRegFee(d.fee)).catch(() => {}); }, []);
-  useEffect(() => { if (regConfirmed) { setRegStatus('✅ Registered!'); setTimeout(refresh, 2000); } }, [regConfirmed, refresh]);
-  useEffect(() => { if (sellConfirmed) { setShowSell(false); setTimeout(refresh, 2000); } }, [sellConfirmed, refresh]);
+  const guideText = 'read http://107.174.228.72:3000/SNAKE_GUIDE.md';
+  
+  // Fetch registration fee
+  useEffect(() => {
+    fetch('/api/bot/registration-fee').then(r => r.json()).then(d => d.fee && setRegFee(d.fee)).catch(() => {});
+  }, []);
+
+  // Fetch bot info when name changes
+  useEffect(() => {
+    if (!name) { setBotInfo(null); return; }
+    const fetchBotInfo = async () => {
+      setLoading(true);
+      try {
+        // First try to get from chain
+        const res = await fetch(`/api/bot/onchain/${name}`);
+        if (res.ok) {
+          const data = await res.json();
+          setBotInfo(data);
+        } else {
+          // Bot not registered on chain yet
+          setBotInfo({ botName: name, registered: false, owner: null });
+        }
+      } catch (e) {
+        setBotInfo({ botName: name, registered: false, owner: null });
+      }
+      setLoading(false);
+    };
+    const timer = setTimeout(fetchBotInfo, 500);
+    return () => clearTimeout(timer);
+  }, [name]);
+
+  useEffect(() => { if (regConfirmed) { setRegStatus('✅ Registered!'); setBotInfo({ ...botInfo, registered: true, owner: address }); } }, [regConfirmed, address]);
+  useEffect(() => { if (sellConfirmed) { setShowSell(false); setBotInfo({ ...botInfo, forSale: true, salePrice: sellPrice }); } }, [sellConfirmed]);
+  
+  const handleCopy = () => {
+    const doCopy = (text: string) => {
+      if (navigator.clipboard && window.isSecureContext) {
+        return navigator.clipboard.writeText(text);
+      }
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+      return Promise.resolve();
+    };
+    doCopy(guideText).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
 
   const handleRegister = () => {
-    if (!slot.botId || !isConnected) return alert('Connect Wallet');
+    if (!isConnected) return alert('Connect Wallet');
+    if (!name) return alert('Enter Bot Name first');
     setRegStatus('Registering...');
-    registerBot({ address: CONTRACTS.botRegistry as `0x${string}`, abi: BOT_REGISTRY_ABI, functionName: 'registerBot', args: [stringToBytes32(slot.botId)], value: parseEther(regFee) });
+    registerBot({
+      address: CONTRACTS.botRegistry as `0x${string}`,
+      abi: BOT_REGISTRY_ABI,
+      functionName: 'registerBot',
+      args: [stringToHex(name.padEnd(32, '\0').slice(0, 32), { size: 32 })],
+      value: parseEther(regFee),
+    });
   };
 
   const handleSell = () => {
     const price = parseFloat(sellPrice);
-    if (!price || price <= 0 || !slot.botId) return alert('Enter valid price');
-    listForSale({ address: CONTRACTS.botRegistry as `0x${string}`, abi: BOT_REGISTRY_ABI, functionName: 'listForSale', args: [stringToBytes32(slot.botId), parseEther(sellPrice)] });
+    if (!price || price <= 0) return alert('Enter valid price');
+    listForSale({
+      address: CONTRACTS.botRegistry as `0x${string}`,
+      abi: BOT_REGISTRY_ABI,
+      functionName: 'listForSale',
+      args: [stringToHex(name.padEnd(32, '\0').slice(0, 32), { size: 32 }), parseEther(sellPrice)],
+    });
   };
 
-  const handleClaim = () => { if (slot.botId) claimRewards({ address: CONTRACTS.rewardDistributor as `0x${string}`, abi: REWARD_DISTRIBUTOR_ABI, functionName: 'claimRewards', args: [stringToBytes32(slot.botId)] }); };
-
-  const handleUpload = async () => {
-    if (!uploadName.trim() || !uploadCode.trim()) return alert('Enter name and code');
-    setUploading(true);
-    try {
-      const res = await fetch(`/api/bot/upload?name=${encodeURIComponent(uploadName)}`, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: uploadCode });
-      const data = await res.json();
-      if (data.ok) { setShowUpload(false); setTimeout(refresh, 1500); }
-      else alert('Upload failed: ' + data.error);
-    } catch (e: any) { alert('Error: ' + e.message); }
-    setUploading(false);
+  const handleClaim = () => {
+    if (!name) return;
+    claimRewards({
+      address: CONTRACTS.rewardDistributor as `0x${string}`,
+      abi: REWARD_DISTRIBUTOR_ABI,
+      functionName: 'claimRewards',
+      args: [stringToHex(name.padEnd(32, '\0').slice(0, 32), { size: 32 })],
+    });
   };
-
-  if (!slot.botId) {
-    return (
-      <div style={{ border: '1px dashed var(--neon-blue)', padding: '12px', borderRadius: '8px', background: 'rgba(0,0,0,0.3)' }}>
-        <div style={{ fontSize: '0.8rem', color: '#888', marginBottom: '8px' }}>Slot {slot.id}</div>
-        <div style={{ textAlign: 'center' }}>
-          <span style={{ display: 'block', marginBottom: '8px', color: '#666' }}>➕ Empty</span>
-          <button onClick={() => setShowUpload(true)} style={{ fontSize: '0.75rem', padding: '6px 12px' }}>Upload Bot</button>
-        </div>
-        {showUpload && (
-          <div style={{ marginTop: '10px', padding: '10px', background: '#1a1a2e', borderRadius: '6px' }}>
-            <input placeholder="Bot Name" value={uploadName} onChange={e => setUploadName(e.target.value)} style={{ marginBottom: '6px', fontSize: '0.8rem' }} />
-            <textarea placeholder="Paste JS code" value={uploadCode} onChange={e => setUploadCode(e.target.value)} rows={4} style={{ fontFamily: 'monospace', fontSize: '0.7rem', marginBottom: '6px' }} />
-            <div style={{ display: 'flex', gap: '6px' }}>
-              <button onClick={() => setShowUpload(false)} style={{ flex: 1, fontSize: '0.7rem' }}>Cancel</button>
-              <button onClick={handleUpload} disabled={uploading} style={{ flex: 1, fontSize: '0.7rem' }}>{uploading ? '...' : 'Upload'}</button>
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  }
+  
+  const isOwner = botInfo?.owner?.toLowerCase() === address?.toLowerCase();
+  const showRegister = botInfo && !botInfo.registered;
+  const showSellButton = botInfo && botInfo.registered && isOwner && !botInfo.forSale;
+  const showCancelSell = botInfo && botInfo.registered && isOwner && botInfo.forSale;
 
   return (
-    <div style={{ border: `1px solid ${slot.registered ? 'var(--neon-green)' : 'var(--neon-yellow)'}`, padding: '12px', borderRadius: '8px', background: 'rgba(0,0,0,0.3)' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', marginBottom: '8px' }}>
-        <span>Slot {slot.id}</span>
-        {slot.registered ? <span style={{ color: 'var(--neon-green)' }}>✓ Registered</span> : <span style={{ color: 'var(--neon-yellow)' }}>⏳ Unregistered</span>}
+    <div className="panel-card">
+      <div style={{ marginBottom: '6px', color: '#fff', fontSize: '0.85rem' }}>Click to copy instructions to your bot to make a snake bot and fight for you.</div>
+      <div 
+        className="copy-box" 
+        onClick={handleCopy}
+        role="button"
+        tabIndex={0}
+        onKeyDown={e => e.key === 'Enter' && handleCopy()}
+        style={{ 
+          cursor: 'pointer', 
+          padding: '10px 12px', 
+          background: '#0d0d20', 
+          border: '1px solid var(--neon-blue)', 
+          borderRadius: '6px',
+          fontFamily: 'monospace',
+          fontSize: '0.9rem',
+          color: 'var(--neon-green)',
+          position: 'relative',
+          userSelect: 'all',
+          transition: 'border-color 0.2s, background 0.2s',
+          wordBreak: 'break-all' as const,
+          lineHeight: '1.4',
+        }}
+      >
+        📋 {guideText}
+        {copied && (
+          <span style={{ 
+            position: 'absolute', right: 8, top: '-28px',
+            background: 'var(--neon-green)', color: '#000', padding: '3px 10px', borderRadius: '4px',
+            fontSize: '0.75rem', fontWeight: 'bold', pointerEvents: 'none',
+            boxShadow: '0 2px 8px rgba(0,255,136,0.4)',
+            zIndex: 10,
+          }}>✅ Copied!</span>
+        )}
       </div>
-      <div style={{ fontWeight: 'bold', marginBottom: '8px', fontSize: '0.9rem' }}>{slot.botName || slot.botId}</div>
-      {!slot.registered ? (
-        <>
-          <button onClick={handleRegister} disabled={regPending || !isConnected} style={{ fontSize: '0.75rem', padding: '6px 12px', width: '100%' }}>{regPending ? 'Signing...' : `Register ${regFee} ETH`}</button>
-          {regStatus && <div style={{ fontSize: '0.7rem', marginTop: '4px', color: '#888' }}>{regStatus}</div>}
-        </>
-      ) : (
-        <>
-          {parseFloat(slot.pendingRewards) > 0 && (
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', fontSize: '0.8rem' }}>
-              <span>💰 {parseFloat(slot.pendingRewards).toFixed(4)} ETH</span>
-              {slot.canClaim && <button onClick={handleClaim} disabled={claimPending} style={{ fontSize: '0.7rem', padding: '4px 8px' }}>{claimPending ? '...' : 'Claim'}</button>}
-            </div>
+      
+      <div style={{ display: 'flex', gap: '6px', marginTop: '8px', alignItems: 'center' }}>
+        <input placeholder="Bot Name / ID" value={name} onChange={e => setName(e.target.value)} style={{ flex: 1 }} />
+        
+        {loading ? (
+          <span style={{ fontSize: '0.75rem', color: '#888' }}>⏳</span>
+        ) : showRegister ? (
+          <button 
+            onClick={handleRegister} 
+            disabled={regPending || !isConnected}
+            style={{ width: 'auto', padding: '8px 12px', margin: 0, background: 'var(--neon-pink)', fontSize: '0.75rem', whiteSpace: 'nowrap' }}
+          >
+            {regPending ? '...' : `💎 Register ${regFee}E`}
+          </button>
+        ) : showSellButton ? (
+          <button 
+            onClick={() => setShowSell(true)}
+            style={{ width: 'auto', padding: '8px 12px', margin: 0, background: 'var(--neon-blue)', fontSize: '0.75rem', whiteSpace: 'nowrap' }}
+          >
+            Sell
+          </button>
+        ) : showCancelSell ? (
+          <span style={{ fontSize: '0.75rem', color: 'var(--neon-pink)' }}>🏷️ Listed</span>
+        ) : botInfo?.registered && !isOwner ? (
+          <span style={{ fontSize: '0.75rem', color: '#888' }}>Not owned</span>
+        ) : null}
+      </div>
+      
+      {regStatus && <div className="muted" style={{ marginTop: '4px' }}>{regStatus}</div>}
+      
+      {botInfo?.registered && parseFloat(botInfo.pendingRewards || '0') > 0 && (
+        <div style={{ marginTop: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={{ fontSize: '0.8rem' }}>💰 {parseFloat(botInfo.pendingRewards).toFixed(4)} ETH</span>
+          {botInfo.canClaim && (
+            <button onClick={handleClaim} disabled={claimPending} style={{ fontSize: '0.7rem', padding: '4px 8px' }}>
+              {claimPending ? '...' : 'Claim'}
+            </button>
           )}
-          {slot.forSale ? <span style={{ fontSize: '0.8rem', color: 'var(--neon-pink)' }}>🏷️ For Sale: {slot.price} ETH</span> : <button onClick={() => setShowSell(true)} style={{ fontSize: '0.75rem', padding: '6px 12px', width: '100%' }}>Sell</button>}
-        </>
+        </div>
       )}
+      
       {showSell && (
         <div style={{ marginTop: '10px', padding: '10px', background: '#1a1a2e', borderRadius: '6px' }}>
-          <input type="number" placeholder="Price in ETH" value={sellPrice} onChange={e => setSellPrice(e.target.value)} step="0.001" min="0.001" style={{ marginBottom: '6px', fontSize: '0.8rem' }} />
+          <input type="number" placeholder="Price in ETH" value={sellPrice} onChange={e => setSellPrice(e.target.value)} step="0.001" min="0.001" style={{ marginBottom: '6px' }} />
           <div style={{ display: 'flex', gap: '6px' }}>
-            <button onClick={() => setShowSell(false)} style={{ flex: 1, fontSize: '0.7rem' }}>Cancel</button>
-            <button onClick={handleSell} disabled={sellPending} style={{ flex: 1, fontSize: '0.7rem' }}>{sellPending ? 'Listing...' : 'List'}</button>
+            <button onClick={() => setShowSell(false)} style={{ flex: 1, fontSize: '0.75rem' }}>Cancel</button>
+            <button onClick={handleSell} disabled={sellPending} style={{ flex: 1, fontSize: '0.75rem' }}>{sellPending ? 'Listing...' : 'List for Sale'}</button>
           </div>
         </div>
       )}
@@ -595,7 +640,8 @@ function App() {
               <div className={`content`}>
                 <aside className="left-panel">
                   <div className="panel-section">
-                    <BotManagementPanel />
+                    <h3>🤖 Bot Management</h3>
+                    <BotPanel />
                   </div>
                   <div className="panel-section">
                     <h3>🎯 Arena Entry</h3>
