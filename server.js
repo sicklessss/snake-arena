@@ -1896,8 +1896,12 @@ app.get('/api/competitive/status', (req, res) => {
     const room = rooms.get('competitive-1');
     if (!room) return res.status(404).json({ error: 'no_competitive_room' });
     
+    // Use global matchNumber which includes history, or fall back to room's current match
+    const globalMatchNum = room.currentMatchId || room.matchNumber || 0;
+    
     res.json({
-        matchNumber: room.matchNumber,
+        matchNumber: globalMatchNum,  // This is the global match ID (e.g., 10983)
+        internalMatchNumber: room.matchNumber,  // Internal counter for this room
         matchId: room.currentMatchId,
         gameState: room.gameState,
         timeLeft: room.timerSeconds,
