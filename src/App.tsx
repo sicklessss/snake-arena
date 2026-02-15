@@ -27,10 +27,6 @@ function BotPanel() {
   const [showSell, setShowSell] = useState(false);
   const [sellPrice, setSellPrice] = useState('');
   
-  // User's bots list
-  const [userBots, setUserBots] = useState<any[]>([]);
-  const [loadingUserBots, setLoadingUserBots] = useState(false);
-  
   const { writeContract: registerBot, data: regHash, isPending: regPending } = useWriteContract();
   const { writeContract: listForSale, data: sellHash, isPending: sellPending } = useWriteContract();
   const { writeContract: claimRewards, isPending: claimPending } = useWriteContract();
@@ -43,26 +39,6 @@ function BotPanel() {
   useEffect(() => {
     fetch('/api/bot/registration-fee').then(r => r.json()).then(d => d.fee && setRegFee(d.fee)).catch(() => {});
   }, []);
-
-  // Fetch user's bots when connected
-  useEffect(() => {
-    if (!address) { setUserBots([]); return; }
-    const fetchUserBots = async () => {
-      setLoadingUserBots(true);
-      try {
-        const res = await fetch(`/api/user/bots?address=${address}`);
-        if (res.ok) {
-          const data = await res.json();
-          setUserBots(data.bots || []);
-        }
-      } catch (e) {}
-      setLoadingUserBots(false);
-    };
-    fetchUserBots();
-    // Refresh every 10 seconds
-    const interval = setInterval(fetchUserBots, 10000);
-    return () => clearInterval(interval);
-  }, [address]);
 
   // Fetch bot info when name changes
   useEffect(() => {
@@ -270,55 +246,6 @@ function BotPanel() {
           </div>
         </div>
       )}
-      
-      {/* User's Bots List */}
-      {isConnected && userBots.length > 0 && (
-        <div style={{ marginTop: '16px', padding: '12px', background: '#0d0d20', borderRadius: '8px', border: '1px solid #333' }}>
-          <div style={{ fontSize: '0.8rem', color: '#888', marginBottom: '8px' }}>📋 Your Uploaded Bots</div>
-          {userBots.map((bot) => (
-            <div 
-              key={bot.botId}
-              onClick={() => setName(bot.name)}
-              style={{ 
-                display: 'flex', 
-                alignItems: 'center', 
-                gap: '8px', 
-                padding: '8px', 
-                marginBottom: '6px',
-                background: name === bot.name ? 'rgba(0,255,136,0.1)' : '#1a1a2e',
-                border: name === bot.name ? '1px solid var(--neon-green)' : '1px solid transparent',
-                borderRadius: '6px',
-                cursor: 'pointer',
-                transition: 'all 0.2s'
-              }}
-            >
-              <span style={{ fontSize: '0.85rem', flex: 1 }}>{bot.name}</span>
-              <span style={{ fontSize: '0.7rem', color: '#666' }}>{bot.botId}</span>
-              <span style={{ 
-                fontSize: '0.7rem', 
-                color: bot.running ? 'var(--neon-green)' : '#888',
-                padding: '2px 6px',
-                background: bot.running ? 'rgba(0,255,136,0.1)' : '#222',
-                borderRadius: '4px'
-              }}>
-                {bot.running ? '● Running' : '○ Stopped'}
-              </span>
-            </div>
-          ))}
-          <div style={{ fontSize: '0.7rem', color: '#666', marginTop: '4px' }}>Click a bot to select</div>
-        </div>
-      )}
-      
-      {isConnected && loadingUserBots && userBots.length === 0 && (
-        <div style={{ marginTop: '16px', textAlign: 'center', color: '#666', fontSize: '0.8rem' }}>Loading your bots...</div>
-      )}
-      
-      {isConnected && !loadingUserBots && userBots.length === 0 && (
-        <div style={{ marginTop: '16px', padding: '12px', background: '#0d0d20', borderRadius: '8px', border: '1px dashed #333', textAlign: 'center' }}>
-          <div style={{ fontSize: '0.8rem', color: '#666' }}>No bots uploaded yet</div>
-          <div style={{ fontSize: '0.7rem', color: '#444', marginTop: '4px' }}>Upload a bot to see it here</div>
-        </div>
-      )}
     </div>
   );
 }
@@ -453,7 +380,7 @@ function Prediction({ matchId: propMatchId }: { matchId: number | null }) {
           value={matchId} 
           onChange={e => setMatchId(e.target.value)}
           placeholder="#"
-          style={{ width: '60px', textAlign: 'right' }}
+          style={{ width: '100px', textAlign: 'right' }}
         />
       </div>
       <input placeholder="Bot Name" value={botId} onChange={e => setBotId(e.target.value)} />
@@ -467,21 +394,48 @@ function Prediction({ matchId: propMatchId }: { matchId: number | null }) {
   );
 }
 
-function CompetitiveEnter({ matchNumber }: { matchNumber: number }) {
+function CompetitiveEnter({ matchNumber: propMatchNumber }: { matchNumber: number }) {
   const { isConnected } = useAccount();
   const [botName, setBotName] = useState('');
   const [targetMatch, setTargetMatch] = useState<string>('');
   const [status, setStatus] = useState('');
   const [resolvedBotId, setResolvedBotId] = useState('');
+  const [currentMatch, setCurrentMatch] = useState<number>(propMatchNumber || 0);
   const { writeContract, data: hash, isPending } = useWriteContract();
   const { isLoading: isConfirming, isSuccess: isConfirmed } = useWaitForTransactionReceipt({ hash });
 
+  // Fetch current match number from API
+  useEffect(() => {
+    const fetchMatchNumber = async () => {
+      try {
+        const res = await fetch('/api/competitive/status');
+        if (res.ok) {
+          const data = await res.json();
+          if (data.matchNumber) {
+            setCurrentMatch(data.matchNumber);
+            setTargetMatch(data.matchNumber.toString());
+          }
+        }
+      } catch (e) {}
+    };
+    fetchMatchNumber();
+    const interval = setInterval(fetchMatchNumber, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Update when prop changes
+  useEffect(() => {
+    if (propMatchNumber > 0) {
+      setCurrentMatch(propMatchNumber);
+    }
+  }, [propMatchNumber]);
+
   // Auto-update target match when current match changes
   useEffect(() => {
-    if (matchNumber > 0) {
-      setTargetMatch(matchNumber.toString());
+    if (currentMatch > 0 && !targetMatch) {
+      setTargetMatch(currentMatch.toString());
     }
-  }, [matchNumber]);
+  }, [currentMatch]);
 
   useEffect(() => {
     if (isConfirmed && hash && resolvedBotId) {
@@ -495,7 +449,7 @@ function CompetitiveEnter({ matchNumber }: { matchNumber: number }) {
     if (!isConnected) return alert('Connect Wallet');
     if (!botName) return alert('Enter Bot Name');
     const mn = parseInt(targetMatch);
-    if (isNaN(mn) || mn < matchNumber) return alert('Match number must be >= current match #' + matchNumber);
+    if (isNaN(mn) || mn < currentMatch) return alert('Match number must be >= current match #' + currentMatch);
     try {
       setStatus('Looking up bot...');
       const res = await fetch('/api/bot/lookup?name=' + encodeURIComponent(botName));
@@ -508,9 +462,9 @@ function CompetitiveEnter({ matchNumber }: { matchNumber: number }) {
 
   return (
     <div className="panel-card">
-      <div className="panel-row"><span>Current Match</span><span style={{ color: 'var(--neon-green)', fontWeight: 'bold' }}>#{matchNumber}</span></div>
+      <div className="panel-row"><span>Current Match</span><span style={{ color: 'var(--neon-green)', fontWeight: 'bold' }}>#{currentMatch}</span></div>
       <input placeholder="Bot Name" value={botName} onChange={e => setBotName(e.target.value)} />
-      <input placeholder={`Target Match # (>= ${matchNumber})`} value={targetMatch} onChange={e => setTargetMatch(e.target.value)} style={{ marginTop: '6px' }} type="number" />
+      <input placeholder={`Target Match # (>= ${currentMatch})`} value={targetMatch} onChange={e => setTargetMatch(e.target.value)} style={{ marginTop: '6px' }} type="number" />
       <div className="muted" style={{ marginTop: '4px' }}>Cost: 0.001 ETH per entry</div>
       <button onClick={handleEnter} disabled={isPending || isConfirming} style={{ marginTop: '6px' }}>{isPending ? 'Signing...' : isConfirming ? 'Confirming...' : '🎯 Enter Arena'}</button>
       {status && <div className="muted" style={{ marginTop: '6px' }}>{status}</div>}
