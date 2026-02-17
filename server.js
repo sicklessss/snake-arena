@@ -11,11 +11,12 @@ const { Worker } = require('worker_threads');
 // --- Blockchain Config ---
 const { ethers } = require('ethers');
 
-// Contract addresses (to be updated after deployment)
+// Contract addresses (updated 2026-02-17 - v3 with NFT)
 const CONTRACTS = {
-    botRegistry: process.env.BOT_REGISTRY_CONTRACT || '0x303FC17a0a849d0aB5Ca9b6C0c78916014f23D1c',
-    rewardDistributor: process.env.REWARD_DISTRIBUTOR_CONTRACT || '0xD419fE00b20f472132A5B3E803962Ae4fd962d4B',
-    pariMutuel: process.env.PARIMUTUEL_CONTRACT || '0x01C38985C826c8D16E057d7d590Da0A37947fed7'
+    botRegistry: process.env.BOT_REGISTRY_CONTRACT || '0xB1D0a2C155afaa35b5eBA7aABd38c38A05D5fdD4',
+    rewardDistributor: process.env.REWARD_DISTRIBUTOR_CONTRACT || '0x31367c31a0dB8b1A10A4b485A460d0D140BE7B5b',
+    pariMutuel: process.env.PARIMUTUEL_CONTRACT || '0x0c1C737150a22112fE2be7dB2D46001A9f83F95f',
+    snakeBotNFT: process.env.NFT_CONTRACT || '0x1f73351052d763579EDac143890E903ff0984aa3'
 };
 
 // Backend wallet for creating bots on-chain
@@ -43,15 +44,24 @@ const REWARD_DISTRIBUTOR_ABI = [
     "function MIN_CLAIM_THRESHOLD() external view returns (uint256)"
 ];
 
+const SNAKE_BOT_NFT_ABI = [
+    "function tokenURI(uint256 tokenId) external view returns (string memory)",
+    "function ownerOf(uint256 tokenId) external view returns (address)",
+    "function botToTokenId(bytes32) external view returns (uint256)",
+    "function tokenIdToBot(uint256) external view returns (bytes32)"
+];
+
 // Initialize contracts
 let botRegistryContract = null;
 let rewardDistributorContract = null;
+let snakeBotNFTContract = null;
 
 function initContracts() {
     if (backendWallet && CONTRACTS.botRegistry !== '0x0000000000000000000000000000000000000000') {
         botRegistryContract = new ethers.Contract(CONTRACTS.botRegistry, BOT_REGISTRY_ABI, backendWallet);
         rewardDistributorContract = new ethers.Contract(CONTRACTS.rewardDistributor, REWARD_DISTRIBUTOR_ABI, provider);
-        log.important(`[Blockchain] Contracts initialized. Registry: ${CONTRACTS.botRegistry}`);
+        snakeBotNFTContract = new ethers.Contract(CONTRACTS.snakeBotNFT, SNAKE_BOT_NFT_ABI, provider);
+        log.important(`[Blockchain] Contracts initialized. Registry: ${CONTRACTS.botRegistry}, NFT: ${CONTRACTS.snakeBotNFT}`);
     } else {
         log.warn('[Blockchain] Contracts not initialized - set env vars or deploy contracts');
     }
@@ -2141,6 +2151,73 @@ app.get('/api/user/bots', (req, res) => {
     res.json({ ok: true, bots: userBots, count: userBots.length });
 });
 
+// Get bot by name (for claiming)
+app.get('/api/bot/by-name/:name', (req, res) => {
+    const { name } = req.params;
+    if (!name) {
+        return res.status(400).json({ error: 'Missing name parameter' });
+    }
+    
+    // Find bot by name (case insensitive)
+    const botEntry = Object.entries(botRegistry).find(([id, bot]) => 
+        bot.name.toLowerCase() === name.toLowerCase()
+    );
+    
+    if (!botEntry) {
+        return res.status(404).json({ error: 'bot_not_found', message: 'Bot not found' });
+    }
+    
+    const [botId, bot] = botEntry;
+    
+    res.json({
+        ok: true,
+        botId: botId,
+        name: bot.name,
+        owner: bot.owner,
+        credits: bot.credits,
+        running: bot.running || false,
+        botType: bot.botType || 'agent',
+        createdAt: bot.createdAt
+    });
+});
+
+// Claim bot ownership
+app.post('/api/bot/claim', async (req, res) => {
+    const { name, address } = req.body;
+    
+    if (!name || !address) {
+        return res.status(400).json({ error: 'Missing name or address' });
+    }
+    
+    // Find bot by name
+    const botEntry = Object.entries(botRegistry).find(([id, bot]) => 
+        bot.name.toLowerCase() === name.toLowerCase()
+    );
+    
+    if (!botEntry) {
+        return res.status(404).json({ error: 'bot_not_found' });
+    }
+    
+    const [botId, bot] = botEntry;
+    
+    // Check if already owned
+    if (bot.owner) {
+        return res.status(400).json({ error: 'already_claimed', message: 'This bot is already claimed' });
+    }
+    
+    // Claim ownership
+    botRegistry[botId].owner = address.toLowerCase();
+    saveBotRegistry();
+    
+    res.json({
+        ok: true,
+        message: 'Bot claimed successfully',
+        botId: botId,
+        name: bot.name,
+        owner: address.toLowerCase()
+    });
+});
+
 // --- Betting (MVP, in-memory) ---
 const betPools = {}; // matchId -> { total: 0, bets: [] }
 
@@ -2312,6 +2389,38 @@ app.get('/api/marketplace/listings', async (req, res) => {
         res.json({ listings: formatted });
     } catch (e) {
         log.error('[API] /api/marketplace/listings error:', e.message);
+        res.status(500).json({ error: 'query_failed', message: e.message });
+    }
+});
+
+// Get bot NFT info
+app.get('/api/bot/nft/:botId', async (req, res) => {
+    try {
+        const { botId } = req.params;
+        if (!snakeBotNFTContract) {
+            return res.status(503).json({ error: 'nft_contract_not_initialized' });
+        }
+        
+        // Get tokenId for this bot
+        const tokenId = await snakeBotNFTContract.botToTokenId(ethers.encodeBytes32String(botId));
+        
+        if (tokenId === 0n) {
+            return res.json({ hasNFT: false, botId });
+        }
+        
+        // Get tokenURI
+        const tokenURI = await snakeBotNFTContract.tokenURI(tokenId);
+        const owner = await snakeBotNFTContract.ownerOf(tokenId);
+        
+        res.json({
+            hasNFT: true,
+            botId,
+            tokenId: Number(tokenId),
+            tokenURI,
+            owner
+        });
+    } catch (e) {
+        log.error('[API] /api/bot/nft error:', e.message);
         res.status(500).json({ error: 'query_failed', message: e.message });
     }
 });
