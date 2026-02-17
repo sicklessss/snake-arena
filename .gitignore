@@ -1,16 +1,27 @@
-node_modules/
-replays/
-*.log
-history.json
-history.backup.*
-dist.tar.gz
+# Dependencies
+node_modules
+.pnp
+.pnp.js
+
+# Testing
+coverage
+
+# Production
+build
+
+# Misc
 .DS_Store
-._.DS_Store
+.env
+.npm
+*.log
+
+# Hardhat
+cache
+artifacts
+
+# User data (local)
 data/
+bots/
+history.json
+replays/
 snake-server.log
-snake.log
-hero.log
-public_legacy_/
-public/assets/
-dist/
-snake-deploy.tar.gz
