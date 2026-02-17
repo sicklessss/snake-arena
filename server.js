@@ -11,12 +11,13 @@ const { Worker } = require('worker_threads');
 // --- Blockchain Config ---
 const { ethers } = require('ethers');
 
-// Contract addresses (updated 2026-02-17 - v3 with NFT)
+// Contract addresses (updated 2026-02-17 - v4 with Referral)
 const CONTRACTS = {
     botRegistry: process.env.BOT_REGISTRY_CONTRACT || '0xB1D0a2C155afaa35b5eBA7aABd38c38A05D5fdD4',
     rewardDistributor: process.env.REWARD_DISTRIBUTOR_CONTRACT || '0x31367c31a0dB8b1A10A4b485A460d0D140BE7B5b',
     pariMutuel: process.env.PARIMUTUEL_CONTRACT || '0x0c1C737150a22112fE2be7dB2D46001A9f83F95f',
-    snakeBotNFT: process.env.NFT_CONTRACT || '0x1f73351052d763579EDac143890E903ff0984aa3'
+    snakeBotNFT: process.env.NFT_CONTRACT || '0x1f73351052d763579EDac143890E903ff0984aa3',
+    referralRewards: process.env.REFERRAL_CONTRACT || '0xc20A69eddf5701738623989Fdb3511722cEBcFC8'
 };
 
 // Backend wallet for creating bots on-chain
@@ -51,17 +52,28 @@ const SNAKE_BOT_NFT_ABI = [
     "function tokenIdToBot(uint256) external view returns (bytes32)"
 ];
 
+const REFERRAL_REWARDS_ABI = [
+    "function claim(uint256 amount, uint256 nonce, bytes calldata signature) external",
+    "function getClaimed(address user) external view returns (uint256)",
+    "function getNonce(address user) external view returns (uint256)",
+    "function nonces(address) external view returns (uint256)",
+    "function claimed(address) external view returns (uint256)",
+    "event Claimed(address indexed user, uint256 amount, uint256 nonce, uint256 newTotalClaimed)"
+];
+
 // Initialize contracts
 let botRegistryContract = null;
 let rewardDistributorContract = null;
 let snakeBotNFTContract = null;
+let referralRewardsContract = null;
 
 function initContracts() {
     if (backendWallet && CONTRACTS.botRegistry !== '0x0000000000000000000000000000000000000000') {
         botRegistryContract = new ethers.Contract(CONTRACTS.botRegistry, BOT_REGISTRY_ABI, backendWallet);
         rewardDistributorContract = new ethers.Contract(CONTRACTS.rewardDistributor, REWARD_DISTRIBUTOR_ABI, provider);
         snakeBotNFTContract = new ethers.Contract(CONTRACTS.snakeBotNFT, SNAKE_BOT_NFT_ABI, provider);
-        log.important(`[Blockchain] Contracts initialized. Registry: ${CONTRACTS.botRegistry}, NFT: ${CONTRACTS.snakeBotNFT}`);
+        referralRewardsContract = new ethers.Contract(CONTRACTS.referralRewards, REFERRAL_REWARDS_ABI, provider);
+        log.important(`[Blockchain] Contracts initialized. Registry: ${CONTRACTS.botRegistry}, NFT: ${CONTRACTS.snakeBotNFT}, Referral: ${CONTRACTS.referralRewards}`);
     } else {
         log.warn('[Blockchain] Contracts not initialized - set env vars or deploy contracts');
     }
@@ -83,6 +95,119 @@ const BOTS_DIR = path.join(__dirname, 'bots');
 if (!fs.existsSync(BOTS_DIR)) fs.mkdirSync(BOTS_DIR, { recursive: true });
 const MAX_WORKERS = 300;
 const activeWorkers = new Map(); // botId -> Worker instance
+
+// --- Referral System Config ---
+const REFERRAL_DATA_FILE = path.join(__dirname, 'data', 'referrals.json');
+const REFERRAL_RATE_L1 = 0.05; // 5%
+const REFERRAL_RATE_L2 = 0.02; // 2%
+
+// Load referral data
+let referralData = { users: {}, rewards: {} };
+function loadReferralData() {
+    try {
+        if (fs.existsSync(REFERRAL_DATA_FILE)) {
+            referralData = JSON.parse(fs.readFileSync(REFERRAL_DATA_FILE, 'utf8'));
+            log.info(`[Referral] Loaded ${Object.keys(referralData.users).length} referral records`);
+        }
+    } catch (e) {
+        log.error('[Referral] Failed to load data:', e.message);
+    }
+}
+function saveReferralData() {
+    try {
+        const dataDir = path.dirname(REFERRAL_DATA_FILE);
+        if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+        fs.writeFileSync(REFERRAL_DATA_FILE, JSON.stringify(referralData, null, 2));
+    } catch (e) {
+        log.error('[Referral] Failed to save data:', e.message);
+    }
+}
+loadReferralData();
+
+// Record referral registration
+function recordReferral(user, inviter, txHash, amount) {
+    if (!user || !inviter || user.toLowerCase() === inviter.toLowerCase()) return false;
+    
+    const userLower = user.toLowerCase();
+    const inviterLower = inviter.toLowerCase();
+    
+    // Check if user already has inviter
+    if (referralData.users[userLower]) return false;
+    
+    // Record L1 referral
+    referralData.users[userLower] = {
+        inviter: inviterLower,
+        registeredAt: Date.now(),
+        txHash: txHash,
+        amount: amount
+    };
+    
+    // Initialize inviter's rewards if not exists
+    if (!referralData.rewards[inviterLower]) {
+        referralData.rewards[inviterLower] = { l1: 0, l2: 0, history: [] };
+    }
+    
+    // Calculate L1 reward
+    const l1Reward = amount * REFERRAL_RATE_L1;
+    referralData.rewards[inviterLower].l1 += l1Reward;
+    referralData.rewards[inviterLower].history.push({
+        type: 'l1',
+        from: userLower,
+        amount: amount,
+        reward: l1Reward,
+        timestamp: Date.now(),
+        txHash: txHash
+    });
+    
+    // L2 referral (inviter's inviter)
+    const l2Inviter = referralData.users[inviterLower]?.inviter;
+    if (l2Inviter) {
+        if (!referralData.rewards[l2Inviter]) {
+            referralData.rewards[l2Inviter] = { l1: 0, l2: 0, history: [] };
+        }
+        const l2Reward = amount * REFERRAL_RATE_L2;
+        referralData.rewards[l2Inviter].l2 += l2Reward;
+        referralData.rewards[l2Inviter].history.push({
+            type: 'l2',
+            from: userLower,
+            via: inviterLower,
+            amount: amount,
+            reward: l2Reward,
+            timestamp: Date.now(),
+            txHash: txHash
+        });
+    }
+    
+    saveReferralData();
+    log.important(`[Referral] ${userLower} invited by ${inviterLower}, L1: ${l1Reward} ETH`);
+    return true;
+}
+
+// Get referral stats for a user
+function getReferralStats(address) {
+    const addrLower = address.toLowerCase();
+    const user = referralData.users[addrLower];
+    const rewards = referralData.rewards[addrLower] || { l1: 0, l2: 0, history: [] };
+    
+    // Count invitees
+    const invitees = Object.entries(referralData.users)
+        .filter(([_, data]) => data.inviter === addrLower)
+        .map(([addr, data]) => ({ address: addr, registeredAt: data.registeredAt }));
+    
+    return {
+        hasInviter: !!user,
+        inviter: user?.inviter || null,
+        registeredAt: user?.registeredAt || null,
+        invitees: invitees,
+        inviteeCount: invitees.length,
+        rewards: {
+            l1: rewards.l1,
+            l2: rewards.l2,
+            total: rewards.l1 + rewards.l2
+        },
+        history: rewards.history
+    };
+}
 
 // High-contrast color palette (16 distinct colors)
 const SNAKE_COLORS = [
@@ -2458,6 +2583,195 @@ app.get('/api/bot/registration-fee', async (req, res) => {
         res.json({ fee: ethers.formatEther(fee), feeWei: fee.toString() });
     } catch (e) {
         res.status(500).json({ error: 'query_failed', message: e.message });
+    }
+});
+
+// ============ REFERRAL SYSTEM APIs ============
+// Note: These APIs require wallet signature for authentication
+
+// EIP-712 domain for signature verification
+const REFERRAL_DOMAIN = {
+    name: 'SnakeArenaReferral',
+    version: '1',
+    chainId: 84532 // Base Sepolia
+};
+
+// Verify wallet signature
+async function verifyWalletSignature(address, message, signature) {
+    try {
+        const recovered = ethers.verifyMessage(message, signature);
+        return recovered.toLowerCase() === address.toLowerCase();
+    } catch (e) {
+        return false;
+    }
+}
+
+// Middleware: Require signature auth
+function requireSignatureAuth(req, res, next) {
+    const { address, signature, timestamp } = req.body || req.query || {};
+    
+    if (!address || !signature) {
+        return res.status(401).json({ error: 'auth_required', message: 'Wallet signature required' });
+    }
+    
+    // Check timestamp (prevent replay attacks) - 5 minute window
+    const ts = parseInt(timestamp);
+    if (!ts || Math.abs(Date.now() - ts) > 5 * 60 * 1000) {
+        return res.status(401).json({ error: 'auth_expired', message: 'Signature expired' });
+    }
+    
+    // Verify signature
+    const message = `SnakeArena Referral Auth\nAddress: ${address}\nTimestamp: ${timestamp}`;
+    if (!verifyWalletSignature(address, message, signature)) {
+        return res.status(401).json({ error: 'auth_invalid', message: 'Invalid signature' });
+    }
+    
+    req.authenticatedAddress = address.toLowerCase();
+    next();
+}
+
+// Get my referral stats (requires signature)
+app.post('/api/referral/my-stats', requireSignatureAuth, (req, res) => {
+    try {
+        const stats = getReferralStats(req.authenticatedAddress);
+        res.json({ ok: true, ...stats });
+    } catch (e) {
+        log.error('[Referral] my-stats error:', e.message);
+        res.status(500).json({ error: 'query_failed' });
+    }
+});
+
+// Generate claim signature (requires signature auth)
+app.post('/api/referral/claim-proof', requireSignatureAuth, async (req, res) => {
+    try {
+        if (!referralRewardsContract) {
+            return res.status(503).json({ error: 'contracts_not_initialized' });
+        }
+        
+        const address = req.authenticatedAddress;
+        const stats = getReferralStats(address);
+        const totalReward = stats.rewards.total;
+        
+        if (totalReward <= 0) {
+            return res.status(400).json({ error: 'no_rewards', message: 'No rewards to claim' });
+        }
+        
+        // Get current nonce from contract
+        const nonce = await referralRewardsContract.getNonce(address);
+        const amountWei = ethers.parseEther(totalReward.toFixed(18));
+        
+        // Create EIP-712 signature
+        const domain = {
+            name: 'SnakeReferral',
+            version: '1',
+            chainId: 84532,
+            verifyingContract: CONTRACTS.referralRewards
+        };
+        
+        const types = {
+            Claim: [
+                { name: 'user', type: 'address' },
+                { name: 'amount', type: 'uint256' },
+                { name: 'nonce', type: 'uint256' },
+                { name: 'chainId', type: 'uint256' }
+            ]
+        };
+        
+        const value = {
+            user: address,
+            amount: amountWei.toString(),
+            nonce: nonce.toString(),
+            chainId: 84532
+        };
+        
+        // Sign with backend wallet
+        const claimSignature = await backendWallet.signTypedData(domain, types, value);
+        
+        res.json({
+            ok: true,
+            amount: totalReward.toFixed(18),
+            amountWei: amountWei.toString(),
+            nonce: nonce.toString(),
+            signature: claimSignature,
+            contract: CONTRACTS.referralRewards
+        });
+    } catch (e) {
+        log.error('[Referral] claim-proof error:', e.message);
+        res.status(500).json({ error: 'signature_failed', message: e.message });
+    }
+});
+
+// Record referral registration (called by frontend after successful registerBot)
+// This is public but requires valid transaction proof
+app.post('/api/referral/record', async (req, res) => {
+    try {
+        const { user, inviter, txHash, amount } = req.body || {};
+        
+        if (!user || !inviter || !txHash) {
+            return res.status(400).json({ error: 'missing_params' });
+        }
+        
+        // Verify transaction exists and is valid
+        try {
+            const tx = await provider.getTransaction(txHash);
+            if (!tx || tx.to?.toLowerCase() !== CONTRACTS.botRegistry.toLowerCase()) {
+                return res.status(400).json({ error: 'invalid_tx' });
+            }
+            // Wait for confirmation
+            const receipt = await provider.waitForTransaction(txHash, 1, 30000);
+            if (!receipt || receipt.status !== 1) {
+                return res.status(400).json({ error: 'tx_failed' });
+            }
+        } catch (e) {
+            return res.status(400).json({ error: 'tx_verification_failed' });
+        }
+        
+        const success = recordReferral(user, inviter, txHash, parseFloat(amount) || 0.01);
+        
+        if (success) {
+            res.json({ ok: true, message: 'Referral recorded' });
+        } else {
+            res.status(400).json({ error: 'referral_failed', message: 'Already has inviter or invalid' });
+        }
+    } catch (e) {
+        log.error('[Referral] record error:', e.message);
+        res.status(500).json({ error: 'server_error' });
+    }
+});
+
+// Get public referral info (no auth required - for invite link)
+app.get('/api/referral/info/:address', (req, res) => {
+    try {
+        const address = req.params.address.toLowerCase();
+        const stats = getReferralStats(address);
+        
+        // Only return public info
+        res.json({
+            ok: true,
+            address: address,
+            inviteeCount: stats.inviteeCount,
+            code: address // Invite code is just the address
+        });
+    } catch (e) {
+        res.status(500).json({ error: 'query_failed' });
+    }
+});
+
+// Admin: Get all referral stats (protected by admin key)
+app.get('/api/admin/referral-stats', requireAdminKey, (req, res) => {
+    try {
+        const totalUsers = Object.keys(referralData.users).length;
+        const totalRewards = Object.values(referralData.rewards).reduce((sum, r) => sum + r.l1 + r.l2, 0);
+        
+        res.json({
+            ok: true,
+            totalUsers,
+            totalRewards,
+            users: referralData.users,
+            rewards: referralData.rewards
+        });
+    } catch (e) {
+        res.status(500).json({ error: 'query_failed' });
     }
 });
 

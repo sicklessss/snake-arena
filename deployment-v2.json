@@ -1,0 +1,11 @@
+{
+  "network": "baseSepolia",
+  "chainId": 84532,
+  "deployer": "0x24F2A26995A92c6e0120B7c8Ed9E4421b0C6fFf9",
+  "contracts": {
+    "BotRegistry": "0x10c71e51cC7FeFEAe68C083Eb1B1C69A2A4d4FFd",
+    "RewardDistributor": "0x5eE7fadfAde614Fc2376178a2d5645FF54805C3E",
+    "SnakeArenaPariMutuel": "0xD9B2eb22E652424cF2C5662E1dDe859562984c23"
+  },
+  "timestamp": "2026-02-16T17:59:55.094Z"
+}

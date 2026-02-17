@@ -1,0 +1,66 @@
+{
+  "_format": "hh3-artifact-1",
+  "contractName": "ISnakeBotNFT",
+  "sourceName": "contracts/BotRegistry.sol",
+  "abi": [
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "_to",
+          "type": "address"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "_botId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "string",
+          "name": "_botName",
+          "type": "string"
+        }
+      ],
+      "name": "mintBotNFT",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "_botId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "uint256",
+          "name": "_matchesPlayed",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "_totalEarnings",
+          "type": "uint256"
+        }
+      ],
+      "name": "updateBotStats",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    }
+  ],
+  "bytecode": "0x",
+  "deployedBytecode": "0x",
+  "linkReferences": {},
+  "deployedLinkReferences": {},
+  "immutableReferences": {},
+  "inputSourceName": "project/contracts/BotRegistry.sol",
+  "buildInfoId": "solc-0_8_19-80987926feb82dc42fffd62eefe286d0ae2b467e"
+}

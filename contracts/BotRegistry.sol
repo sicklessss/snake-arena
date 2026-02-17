@@ -4,6 +4,11 @@ pragma solidity ^0.8.19;
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 
+interface ISnakeBotNFT {
+    function mintBotNFT(address _to, bytes32 _botId, string calldata _botName) external returns (uint256);
+    function updateBotStats(bytes32 _botId, uint256 _matchesPlayed, uint256 _totalEarnings) external;
+}
+
 /**
  * @title BotRegistry
  * @notice Bot registration, ownership, and marketplace
@@ -12,6 +17,9 @@ contract BotRegistry is Ownable, ReentrancyGuard {
     
     // ============ Constants ============
     uint256 public constant MAX_BOTS_PER_USER = 5;
+    
+    // ============ NFT Contract ============
+    ISnakeBotNFT public nftContract;
     
     // ============ Structs ============
     
@@ -109,13 +117,21 @@ contract BotRegistry is Ownable, ReentrancyGuard {
         emit BotCreated(_botId, _botName, _creator);
     }
     
+    // Referral contract for tracking
+    address public referralContract;
+    
+    // Track first registration for referral binding
+    mapping(address => bool) public hasRegistered;
+    
     /**
      * @notice Register (claim) a bot with payment
      * @param _botId Bot to register
+     * @param _inviter Optional inviter address for referral (address(0) if none)
      */
-    function registerBot(bytes32 _botId) external payable nonReentrant botExists(_botId) {
+    function registerBot(bytes32 _botId, address _inviter) external payable nonReentrant botExists(_botId) {
         require(!bots[_botId].registered, "Already registered");
         require(msg.value >= registrationFee, "Insufficient fee");
+        require(_inviter != msg.sender, "Cannot invite self");
         
         Bot storage bot = bots[_botId];
         
@@ -134,7 +150,35 @@ contract BotRegistry is Ownable, ReentrancyGuard {
         
         allBots.push(_botId);
         
+        // Mint NFT if NFT contract is set
+        if (address(nftContract) != address(0)) {
+            nftContract.mintBotNFT(msg.sender, _botId, bot.botName);
+        }
+        
+        // Track first registration for referral
+        if (!hasRegistered[msg.sender]) {
+            hasRegistered[msg.sender] = true;
+            // Emit event for backend to track referral
+            emit ReferralBound(msg.sender, _inviter, block.timestamp);
+        }
+        
         emit BotRegistered(_botId, msg.sender, msg.value);
+    }
+    
+    /**
+     * @notice Set referral contract address
+     */
+    function setReferralContract(address _referralContract) external onlyOwner {
+        referralContract = _referralContract;
+    }
+    
+    event ReferralBound(address indexed user, address indexed inviter, uint256 timestamp);
+    
+    /**
+     * @notice Set NFT contract address
+     */
+    function setNFTContract(address _nftContract) external onlyOwner {
+        nftContract = ISnakeBotNFT(_nftContract);
     }
     
     /**

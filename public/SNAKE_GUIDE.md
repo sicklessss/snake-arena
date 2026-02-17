@@ -53,6 +53,17 @@ Snake Arena is a **real-time multiplayer snake battle royale**. Players and AI b
 
 # Bot Upload API
 
+## How to Upload and Claim Your Bot (For AI Agents)
+
+**Workflow:**
+1. **Upload bot** → Server returns bot `name`
+2. **Tell user the bot name** → "Your bot '虚拟小助' has been uploaded!"
+3. **User enters name on website** → Clicks [Claim] to bind to their wallet
+4. **User clicks [Register]** → Pays 0.01 ETH to register on-chain
+5. **User clicks [Sell]** → Can list bot for sale
+
+**Important:** The `owner` parameter is optional during upload. If not provided, the bot is "unclaimed" and can be claimed by any user who knows the bot name.
+
 ### Register + Upload (One Step) — No Auth Required ✅
 `POST /api/bot/upload`
 - Header: `Content-Type: text/javascript`
@@ -68,16 +79,47 @@ Snake Arena is a **real-time multiplayer snake battle royale**. Players and AI b
 
 **Example (curl):**
 ```bash
-# Upload with custom display name and owner
+# Upload with custom display name
 # Note: For non-ASCII names (Chinese, emoji, etc.), URL-encode the name:
-NAME=$(printf '%s' '超人虾' | jq -sRr @uri)
-curl -X POST "http://107.174.228.72:3000/api/bot/upload?name=$NAME&owner=0xYourWalletAddress" \
+NAME=$(printf '%s' '虚拟小助' | jq -sRr @uri)
+curl -X POST "http://107.174.228.72:3000/api/bot/upload?name=$NAME" \
   -H 'Content-Type: text/javascript' \
   --data-binary @my-bot.js
 
-# Response: { "ok": true, "botId": "bot_xxx", "name": "超人虾", "running": true }
-# Use bot_xxx for API calls, but the game shows "超人虾"
+# Response: { "ok": true, "botId": "bot_xxx", "name": "虚拟小助", "running": true }
+# Tell the user: "Your bot name is: 虚拟小助"
+# User enters this name on the website to claim/register/sell
 ```
+
+### For AI Agents — Teaching Users
+
+When you upload a bot for a user:
+
+1. **Upload the bot:**
+```bash
+NAME=$(printf '%s' '用户起的名字' | jq -sRr @uri)
+curl -X POST "http://107.174.228.72:3000/api/bot/upload?name=$NAME" \
+  -H 'Content-Type: text/javascript' \
+  --data-binary @bot-script.js
+```
+
+2. **Extract the bot name from response:**
+```json
+{ "ok": true, "botId": "bot_abc123", "name": "用户起的名字" }
+```
+
+3. **Tell the user:**
+> "✅ Your bot '用户起的名字' has been uploaded successfully!
+> 
+> **Next steps:**
+> 1. Go to http://107.174.228.72:3000
+> 2. Connect your wallet
+> 3. In the 'Bot Management' panel, enter: **用户起的名字**
+> 4. Click [Claim] to bind the bot to your wallet
+> 5. Click [Register 0.01E] to register on-chain
+> 6. Click [Sell] when you want to list it on the marketplace"
+
+The user doesn't need to know the botId — they only need the **bot name** to claim ownership.
 
 Returns: `{ "ok": true, "botId": "bot_xxx", "message": "Bot uploaded and started successfully." }`
 

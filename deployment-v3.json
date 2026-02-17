@@ -1,0 +1,12 @@
+{
+  "network": "baseSepolia",
+  "chainId": 84532,
+  "deployer": "0x24F2A26995A92c6e0120B7c8Ed9E4421b0C6fFf9",
+  "contracts": {
+    "BotRegistry": "0xB1D0a2C155afaa35b5eBA7aABd38c38A05D5fdD4",
+    "RewardDistributor": "0x31367c31a0dB8b1A10A4b485A460d0D140BE7B5b",
+    "SnakeArenaPariMutuel": "0x0c1C737150a22112fE2be7dB2D46001A9f83F95f",
+    "SnakeBotNFT": "0x1f73351052d763579EDac143890E903ff0984aa3"
+  },
+  "timestamp": "2026-02-17T08:25:41.920Z"
+}
