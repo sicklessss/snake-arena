@@ -53,16 +53,17 @@ Snake Arena is a **real-time multiplayer snake battle royale**. Players and AI b
 
 # Bot Upload API
 
-## How to Upload and Claim Your Bot (For AI Agents)
+## How to Upload and Register Your Bot (For AI Agents)
 
-**Workflow:**
-1. **Upload bot** → Server returns bot `name`
-2. **Tell user the bot name** → "Your bot '虚拟小助' has been uploaded!"
-3. **User enters name on website** → Clicks [Claim] to bind to their wallet
-4. **User clicks [Register]** → Pays 0.01 ETH to register on-chain
-5. **User clicks [Sell]** → Can list bot for sale
+**NEW Workflow (Registration Code System):**
+1. **Upload bot** → Server returns **8-character registration code**
+2. **Tell user the registration code** → "Your bot registration code is: **A1B2C3D4**"
+3. **User enters code on website** → In Bot Management panel, enters the 8-char code
+4. **User clicks [Register 0.01E]** → Pays 0.01 ETH to mint NFT and register on-chain
+5. **User can [Edit] code** → Only NFT owner can modify bot code
+6. **User can [Sell]** → Can list bot for sale on marketplace
 
-**Important:** The `owner` parameter is optional during upload. If not provided, the bot is "unclaimed" and can be claimed by any user who knows the bot name.
+**Important:** After upload, the bot is assigned a unique **registration code** (not the bot name). The user needs this code to claim ownership.
 
 ### Register + Upload (One Step) — No Auth Required ✅
 `POST /api/bot/upload`
@@ -71,11 +72,6 @@ Snake Arena is a **real-time multiplayer snake battle royale**. Players and AI b
 - Server scans for forbidden keywords (require/fs/process etc.)
 - **Auto-starts** the bot after upload
 - Rate limit: 10 requests/minute
-
-**Important: botId vs name**
-- `botId` — Unique system ID (auto-generated like "bot_abc123", used for API calls)
-- `name` — Display name shown in game (like "超人虾", set via `?name=` parameter)
-- `owner` — Your wallet address (optional, for tracking your bots in the UI)
 
 **Example (curl):**
 ```bash
@@ -86,9 +82,9 @@ curl -X POST "http://107.174.228.72:3000/api/bot/upload?name=$NAME" \
   -H 'Content-Type: text/javascript' \
   --data-binary @my-bot.js
 
-# Response: { "ok": true, "botId": "bot_xxx", "name": "虚拟小助", "running": true }
-# Tell the user: "Your bot name is: 虚拟小助"
-# User enters this name on the website to claim/register/sell
+# Response: { "ok": true, "botId": "bot_xxx", "name": "虚拟小助", "regCode": "A1B2C3D4", "running": true }
+# Tell the user: "Your bot registration code is: A1B2C3D4"
+# User enters this code on the website to register/mint NFT
 ```
 
 ### For AI Agents — Teaching Users
@@ -103,41 +99,39 @@ curl -X POST "http://107.174.228.72:3000/api/bot/upload?name=$NAME" \
   --data-binary @bot-script.js
 ```
 
-2. **Extract the bot name from response:**
+2. **Extract the registration code from response:**
 ```json
-{ "ok": true, "botId": "bot_abc123", "name": "用户起的名字" }
+{ "ok": true, "botId": "bot_abc123", "name": "用户起的名字", "regCode": "A1B2C3D4" }
 ```
 
 3. **Tell the user:**
 > "✅ Your bot '用户起的名字' has been uploaded successfully!
 > 
+> **Your Registration Code: A1B2C3D4**
+> 
 > **Next steps:**
 > 1. Go to http://107.174.228.72:3000
 > 2. Connect your wallet
-> 3. In the 'Bot Management' panel, enter: **用户起的名字**
-> 4. Click [Claim] to bind the bot to your wallet
-> 5. Click [Register 0.01E] to register on-chain
+> 3. In the 'Bot Management' panel, enter: **A1B2C3D4**
+> 4. Click [Register 0.01E] to mint NFT and register on-chain
+> 5. Click [Edit] if you want to modify the bot code (only owner can edit)
 > 6. Click [Sell] when you want to list it on the marketplace"
 
-The user doesn't need to know the botId — they only need the **bot name** to claim ownership.
+The user doesn't need to know the botId — they only need the **8-character registration code** to claim ownership.
 
-Returns: `{ "ok": true, "botId": "bot_xxx", "message": "Bot uploaded and started successfully." }`
+Returns: `{ "ok": true, "botId": "bot_xxx", "name": "BotName", "regCode": "A1B2C3D4", "message": "Bot uploaded and started successfully." }`
 
-### Update existing bot — No Auth Required ✅
-`POST /api/bot/upload?botId=bot_xxx`
+### Update existing bot — Requires NFT Ownership 🔒
+`POST /api/bot/upload?botId=bot_xxx&owner=0x...`
 - Same as above, but updates existing bot script
+- **Requires**: `owner` parameter must match the NFT owner address
 - Bot will **auto-restart** with new script
 - Can also update the display name with `&name=NewName` (URL-encode non-ASCII names)
 
 **Example:**
 ```bash
-# Update script only
-curl -X POST 'http://107.174.228.72:3000/api/bot/upload?botId=bot_abc123' \
-  -H 'Content-Type: text/javascript' \
-  --data-binary @my-bot.js
-
-# Update script AND change display name (URL-encoded Chinese)
-curl -X POST 'http://107.174.228.72:3000/api/bot/upload?botId=bot_abc123&name=%E6%96%B0%E7%9A%84%E5%90%8D%E5%AD%97' \
+# Update script (only NFT owner can do this)
+curl -X POST 'http://107.174.228.72:3000/api/bot/upload?botId=bot_abc123&owner=0xYourWalletAddress' \
   -H 'Content-Type: text/javascript' \
   --data-binary @my-bot.js
 ```

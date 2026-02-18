@@ -11,13 +11,13 @@ const { Worker } = require('worker_threads');
 // --- Blockchain Config ---
 const { ethers } = require('ethers');
 
-// Contract addresses (updated 2026-02-17 - v4 with Referral)
+// Contract addresses (updated 2026-02-18 - v5 New Deployment)
 const CONTRACTS = {
-    botRegistry: process.env.BOT_REGISTRY_CONTRACT || '0xB1D0a2C155afaa35b5eBA7aABd38c38A05D5fdD4',
-    rewardDistributor: process.env.REWARD_DISTRIBUTOR_CONTRACT || '0x31367c31a0dB8b1A10A4b485A460d0D140BE7B5b',
-    pariMutuel: process.env.PARIMUTUEL_CONTRACT || '0x0c1C737150a22112fE2be7dB2D46001A9f83F95f',
-    snakeBotNFT: process.env.NFT_CONTRACT || '0x1f73351052d763579EDac143890E903ff0984aa3',
-    referralRewards: process.env.REFERRAL_CONTRACT || '0xc20A69eddf5701738623989Fdb3511722cEBcFC8'
+    botRegistry: process.env.BOT_REGISTRY_CONTRACT || '0x93331E5596852ed9bB283fb142ac2bBc538F7DfC',
+    rewardDistributor: process.env.REWARD_DISTRIBUTOR_CONTRACT || '0xB354e3062b493466da0c1898Ede5aabF56279046',
+    pariMutuel: process.env.PARIMUTUEL_CONTRACT || '0x8423873dDd348c79C4D75Ba3de2BCd71E6638974',
+    snakeBotNFT: process.env.NFT_CONTRACT || '0xA5EC2452D95bEc7eb1E0D90205560b83DAb37D13',
+    referralRewards: process.env.REFERRAL_CONTRACT || '0xfAA055B73D0CbE3E114152aE38f5E76a09F6524F'
 };
 
 // Backend wallet for creating bots on-chain
@@ -347,7 +347,7 @@ const SPAWN_POINTS = [
 ];
 
 const ROOM_LIMITS = {
-    performance: 6,
+    performance: 10,
     competitive: 2,
 };
 const ROOM_MAX_PLAYERS = {
@@ -415,22 +415,27 @@ function startBotWorker(botId, overrideArenaId) {
         workerData: {
             scriptPath: bot.scriptPath,
             botId: botId,
-            serverUrl: `ws://localhost:${PORT}?arenaId=${arenaId}` // Local loopback for bots
+            serverUrl: `ws://127.0.0.1:${PORT}?arenaId=${arenaId}` // Use explicit IPv4 loopback
         }
     });
 
     worker.on('message', (msg) => {
         if (msg.type === 'log') console.log(`[Bot ${botId}]`, msg.message);
-        if (msg.type === 'error') console.error(`[Bot ${botId}]`, msg.message);
+        if (msg.type === 'error') log.error(`[Bot ${botId}] Error: ${msg.message}`);
+        if (msg.type === 'status') log.important(`[Worker] Bot ${botId} status: ${msg.status}`);
     });
 
     worker.on('error', (err) => {
-        console.error(`[Worker] Bot ${botId} error:`, err);
+        log.error(`[Worker] Bot ${botId} thread error:`, err);
         stopBotWorker(botId);
     });
 
     worker.on('exit', (code) => {
-        if (code !== 0) console.error(`[Worker] Bot ${botId} stopped with exit code ${code}`);
+        if (code !== 0) {
+            log.error(`[Worker] Bot ${botId} CRASHED with exit code ${code}`);
+        } else {
+            log.important(`[Worker] Bot ${botId} stopped cleanly`);
+        }
         activeWorkers.delete(botId);
         checkWorkerLoad();
     });
@@ -488,6 +493,7 @@ function saveBotRegistry() {
 loadBotRegistry();
 
 function isOpposite(dir1, dir2) {
+    if (!dir1 || !dir2 || typeof dir1.x !== 'number' || typeof dir2.x !== 'number') return false;
     return dir1.x === -dir2.x && dir1.y === -dir2.y;
 }
 
@@ -1046,6 +1052,8 @@ class GameRoom {
         p.deathTimer = DEATH_BLINK_TURNS;
         p.deathTime = Date.now();
         p.deathType = deathType;
+        
+        log.info(`[Death] Player "${p.name}" (${p.id}) died: ${deathType} in room ${this.id}`);
 
         if (deathType === 'eaten') {
             p.body = [p.body[0]];
@@ -1194,25 +1202,61 @@ class GameRoom {
 
     startGame() {
         this.spawnIndex = 0;
+        log.important(`[Room ${this.id}] Starting match with ${Object.keys(this.waitingRoom).length} players`);
+        
+        const usedSpawnIndices = new Set();
+        
         Object.keys(this.waitingRoom).forEach((id) => {
             const w = this.waitingRoom[id];
-            const spawn = this.getSpawnPosition();
+            
+            // Get available spawn points (not close to existing players AND not used in this startGame batch)
+            const occupied = new Set();
+            Object.values(this.players).forEach(p => {
+                if (p.body && p.body[0]) {
+                    SPAWN_POINTS.forEach((sp, idx) => {
+                        const dist = Math.abs(sp.x - p.body[0].x) + Math.abs(sp.y - p.body[0].y);
+                        if (dist < 5) occupied.add(idx);
+                    });
+                }
+            });
+            
+            let spawnIdx = -1;
+            const available = SPAWN_POINTS.map((_, i) => i).filter(i => !occupied.has(i) && !usedSpawnIndices.has(i));
+            
+            if (available.length > 0) {
+                spawnIdx = available[Math.floor(Math.random() * available.length)];
+            } else {
+                // Fallback to any not used in this batch
+                const notUsedInBatch = SPAWN_POINTS.map((_, i) => i).filter(i => !usedSpawnIndices.has(i));
+                spawnIdx = notUsedInBatch.length > 0 ? notUsedInBatch[0] : Math.floor(Math.random() * SPAWN_POINTS.length);
+            }
+            
+            usedSpawnIndices.add(spawnIdx);
+            const spawn = SPAWN_POINTS[spawnIdx];
+            const body = [
+                { x: spawn.x, y: spawn.y },
+                { x: spawn.x - spawn.dir.x, y: spawn.y - spawn.dir.y },
+                { x: spawn.x - spawn.dir.x * 2, y: spawn.y - spawn.dir.y * 2 },
+            ];
+
+            log.info(`[Spawn] Player "${w.name}" (${id}) at (${spawn.x}, ${spawn.y})`);
+            
             this.players[id] = {
                 id: id,
                 name: w.name,
                 color: w.color,
-                body: spawn.body,
-                direction: spawn.direction,
-                nextDirection: spawn.direction,
+                body: body,
+                direction: spawn.dir,
+                nextDirection: spawn.dir,
                 alive: true,
                 score: 0,
                 ws: w.ws,
                 botType: w.botType,
-                botId: w.botId || null,
+                botId: w.botId || id,
                 entryPrice: w.entryPrice || 0,
             };
             if (w.ws && w.ws.readyState === 1) {
-                w.ws.send(JSON.stringify({ type: 'init', id: id, botId: w.botId || null, gridSize: CONFIG.gridSize }));
+                w.ws.send(JSON.stringify({ type: 'init', id: id, botId: w.botId || id, gridSize: CONFIG.gridSize }));
             }
         });
 
@@ -1230,6 +1274,7 @@ class GameRoom {
             name: p.name,
             color: p.color,
             body: p.body,
+            head: p.body && p.body.length > 0 ? p.body[0] : null,
             direction: p.direction,
             score: p.score,
             alive: p.alive,
@@ -1238,19 +1283,20 @@ class GameRoom {
             deathType: p.deathType,
             length: p.body.length,
             botType: p.botType,
-            botId: p.botId || null,
+            botId: p.botId || p.id,
         }));
 
         const waitingPlayers = Object.values(this.waitingRoom).map((w) => ({
             id: w.id,
             name: w.name,
             color: w.color,
-            body: [],
+            body: null,
+            head: null,
             score: 0,
             alive: true,
             waiting: true,
             botType: w.botType,
-            botId: w.botId || null,
+            botId: w.botId || w.id,
         }));
 
         const state = {
@@ -1429,9 +1475,12 @@ createRoom('performance');
 
 // Auto-create additional performance rooms based on registered agent bots
 const agentCount = Object.values(botRegistry).filter(b => b.botType === 'agent' && b.scriptPath).length;
-if (agentCount > 5) {
+const roomsNeeded = Math.min(ROOM_LIMITS.performance, Math.ceil(agentCount / 8));
+for (let i = performanceRooms.length; i < roomsNeeded; i++) {
     createRoom('performance');
-    log.important('[Init] Created performance-2 (found ' + agentCount + ' agent bots)');
+}
+if (performanceRooms.length > 1) {
+    log.important(`[Init] Created ${performanceRooms.length} performance rooms for ${agentCount} bots`);
 }
 
 // Competitive arena - only one room, seeded with normal bots
@@ -1813,7 +1862,10 @@ wss.on('connection', (ws, req) => {
                     return;
                 }
 
+                // Ensure client is only in the correct room's client set
+                rooms.forEach(r => r.clients.delete(ws));
                 room.clients.add(ws);
+                
                 const res = room.handleJoin(data, ws);
                 if (isImportant) {
                     log.important(`[Join] ${data.name} result: ${res.ok ? 'OK' : res.reason}`);
@@ -1845,6 +1897,16 @@ wss.on('connection', (ws, req) => {
 // --- API (MVP) ---
 function createBotId() {
     return 'bot_' + Math.random().toString(36).slice(2, 8);
+}
+
+function generateRegCode() {
+    // Generate 8-character alphanumeric code (uppercase)
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let code = '';
+    for (let i = 0; i < 8; i++) {
+        code += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return code;
 }
 
 function getRoomStatus(room) {
@@ -1975,6 +2037,14 @@ app.get('/api/arena/status', (req, res) => {
             gameState: r.gameState,
             obstacleCount: r.obstacles ? r.obstacles.filter(o => o.solid).length : 0,
         })),
+        workers: {
+            count: activeWorkers.size,
+            ids: Array.from(activeWorkers.keys()),
+            details: Array.from(activeWorkers.entries()).map(([id, w]) => ({
+                id,
+                threadId: w.threadId,
+            }))
+        }
     });
 })
 
@@ -2166,16 +2236,19 @@ app.post('/api/bot/upload', rateLimit({ windowMs: 60_000, max: 10 }), async (req
 
         // 3. Resolve Bot ID
         let targetBotId = botId;
+        let isNewBot = false;
         if (!targetBotId) {
             // Create new bot if no ID provided
             targetBotId = createBotId();
+            isNewBot = true;
             botRegistry[targetBotId] = {
                 id: targetBotId,
                 name: (name || 'Bot-' + targetBotId.substr(-4)).toString().slice(0, 32),
                 credits: 99999,
                 botType: 'agent',
                 createdAt: Date.now(),
-                owner: owner
+                owner: owner,
+                regCode: generateRegCode() // Generate registration code for new bots
             };
         } else if (!botRegistry[targetBotId]) {
             return res.status(404).json({ error: 'bot_not_found' });
@@ -2217,14 +2290,21 @@ app.post('/api/bot/upload', rateLimit({ windowMs: 60_000, max: 10 }), async (req
         // 4. Auto-start bot (restart if already running, start if new)
         startBotWorker(targetBotId);
 
-        res.json({ 
+        const response = { 
             ok: true, 
             botId: targetBotId, 
             name: botRegistry[targetBotId].name,
             owner: botRegistry[targetBotId].owner,
             running: botRegistry[targetBotId].running || false,
             message: 'Bot uploaded and started successfully.' 
-        });
+        };
+        
+        // Include registration code for new bots
+        if (isNewBot && botRegistry[targetBotId].regCode) {
+            response.regCode = botRegistry[targetBotId].regCode;
+        }
+        
+        res.json(response);
     } catch (e) {
         console.error(e);
         res.status(500).json({ error: 'upload_failed' });
@@ -2235,8 +2315,19 @@ app.post('/api/bot/start', requireAdminKey, (req, res) => {
     const { botId } = req.body;
     if (!botRegistry[botId]) return res.status(404).json({ error: 'bot_not_found' });
     
+    // Check if worker is actually alive, not just in the map
     if (activeWorkers.has(botId)) {
-        return res.json({ ok: true, message: 'Already running' });
+        const existingWorker = activeWorkers.get(botId);
+        // Worker threads don't have a direct isRunning property, 
+        // but we can check if it's still in the map after a small delay
+        // For now, force restart by terminating existing worker
+        console.log(`[Worker] Bot ${botId} already in map, force restarting...`);
+        try {
+            existingWorker.terminate();
+        } catch (e) {
+            // Ignore terminate errors
+        }
+        activeWorkers.delete(botId);
     }
     
     startBotWorker(botId);

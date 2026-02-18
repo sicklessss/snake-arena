@@ -2,7 +2,7 @@
 pragma solidity ^0.8.19;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 interface ISnakeBotNFT {
     function mintBotNFT(address _to, bytes32 _botId, string calldata _botName) external returns (uint256);
@@ -38,6 +38,9 @@ contract BotRegistry is Ownable, ReentrancyGuard {
     
     uint256 public registrationFee = 0.01 ether;
     uint256 public marketplaceFeePercent = 250; // 2.5% platform fee (basis points)
+    
+    // Backend wallet for creating bots
+    address public backendWallet;
     
     // botId => Bot info
     mapping(bytes32 => Bot) public bots;
@@ -80,7 +83,20 @@ contract BotRegistry is Ownable, ReentrancyGuard {
         _;
     }
     
+    modifier onlyBackend() {
+        require(msg.sender == backendWallet || msg.sender == owner(), "Not backend or owner");
+        _;
+    }
+    
     // ============ Core Functions ============
+    
+    /**
+     * @notice Set the backend wallet address (only owner)
+     * @param _backendWallet New backend wallet address
+     */
+    function setBackendWallet(address _backendWallet) external onlyOwner {
+        backendWallet = _backendWallet;
+    }
     
     /**
      * @notice Create a bot entry (called by backend when user uploads)
@@ -92,7 +108,7 @@ contract BotRegistry is Ownable, ReentrancyGuard {
         bytes32 _botId, 
         string calldata _botName,
         address _creator
-    ) external onlyOwner {
+    ) external onlyBackend {
         require(bots[_botId].owner == address(0), "Bot exists");
         require(bytes(_botName).length > 0 && bytes(_botName).length <= 32, "Invalid name");
         require(nameToBot[_botName] == bytes32(0), "Name taken");

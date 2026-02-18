@@ -6,7 +6,21 @@ const WebSocket = require('ws');
 // The user script path is passed in workerData.
 const { scriptPath, botId, serverUrl } = workerData;
 
+const debugLog = (msg) => {
+    const timestamp = new Date().toISOString();
+    const logMsg = `[${timestamp}] [Worker ${botId}] ${msg}\n`;
+    try {
+        fs.appendFileSync('worker-debug.log', logMsg);
+    } catch (e) {}
+    if (parentPort) {
+        parentPort.postMessage({ type: 'debug', message: msg });
+    }
+};
+
+debugLog(`Worker starting. scriptPath: ${scriptPath}, serverUrl: ${serverUrl}`);
+
 if (!fs.existsSync(scriptPath)) {
+    debugLog(`Error: Script not found: ${scriptPath}`);
     console.error(`[Worker ${botId}] Script not found: ${scriptPath}`);
     process.exit(1);
 }
@@ -53,14 +67,20 @@ const safeGlobals = {
     Infinity: Infinity,
     NaN: NaN,
     undefined: undefined,
-    Uint8Array: Uint8Array,
-    Int32Array: Int32Array,
-    Float64Array: Float64Array,
+    // Let VM use its own TypedArrays
     ArrayBuffer: ArrayBuffer,
     Promise: Promise,
     // Block sensitive globals
     require: () => { throw new Error("Security Error: 'require' is blocked."); },
-    process: { env: {} },
+    process: { 
+        env: { NODE_ENV: 'production' },
+        nextTick: (fn, ...args) => process.nextTick(fn, ...args),
+        stdout: { write: () => {} },
+        stderr: { write: () => {} },
+        cwd: () => '/',
+        uptime: () => process.uptime(),
+    },
+    Buffer: Buffer,
     module: {},
     exports: {},
     __dirname: null,
@@ -77,6 +97,8 @@ const safeGlobals = {
 const vm = require('vm');
 
 try {
+    debugLog('Creating sandbox context');
+    
     // Create sandbox context with blocked dangerous globals
     const sandbox = {
         ...safeGlobals,
@@ -86,10 +108,14 @@ try {
         setInterval: setInterval,
         clearTimeout: clearTimeout,
         clearInterval: clearInterval,
+        Buffer: Buffer, // Added Buffer for compatibility with some libraries
+        Uint8Array: Uint8Array,
     };
     
     // Create context from sandbox
     vm.createContext(sandbox);
+    
+    debugLog('Running user script');
     
     // Run the user script in the sandboxed context
     vm.runInContext(userScriptContent, sandbox, {
@@ -97,22 +123,52 @@ try {
         timeout: 30000, // 30 second timeout for script initialization
     });
     
+    debugLog('User script initialization complete');
     parentPort.postMessage({ type: 'status', status: 'running' });
     
     // Keep worker alive - the WebSocket connection in sandbox needs the event loop
-    setInterval(() => {}, 60000);
+    debugLog('Script executed, keeping alive');
+    
+    // Use a shorter interval and add a keep-alive check
+    const keepAlive = setInterval(() => {
+        parentPort.postMessage({ type: 'ping', timestamp: Date.now() });
+    }, 10000);
+    
+    // Prevent process from exiting
+    if (process.stdin && process.stdin.resume) {
+        process.stdin.resume();
+    }
 
 } catch (err) {
+    debugLog(`Error during execution: ${err.message}\n${err.stack}`);
     parentPort.postMessage({ type: 'error', message: `Sandbox error: ${err.message}` });
-    process.exit(1);
+    // Give some time for the message to be sent
+    setTimeout(() => process.exit(1), 100);
 }
+
+// Handle messages from parent
+parentPort.on('message', (msg) => {
+    if (msg.type === 'stop') {
+        debugLog('Received stop command, exiting');
+        process.exit(0);
+    }
+});
 
 // Catch any uncaught exceptions in the worker
 process.on('uncaughtException', (err) => {
+    debugLog(`Uncaught exception: ${err.message}\n${err.stack}`);
     parentPort.postMessage({ type: 'error', message: `Uncaught exception: ${err.message}` });
-    process.exit(1);
+    setTimeout(() => process.exit(1), 100);
 });
 
-process.on('unhandledRejection', (reason) => {
-    parentPort.postMessage({ type: 'error', message: `Unhandled rejection: ${reason}` });
+process.on('unhandledRejection', (reason, promise) => {
+    const msg = reason instanceof Error ? reason.message : String(reason);
+    debugLog(`Unhandled rejection: ${msg}`);
+    parentPort.postMessage({ type: 'error', message: `Unhandled rejection: ${msg}` });
+});
+
+// Handle graceful exit
+process.on('SIGTERM', () => {
+    debugLog('Worker received SIGTERM');
+    process.exit(0);
 });
