@@ -37,7 +37,10 @@ deploy-v5-continue.js
 deploy-v5-finish.js
 deploy-v5.js
 deploy-parimutuel-fixed.js
+deploy-parimutuel-speedup.js
 start-server.sh
 start-server-v2.sh
 clear-bots.js
 configure-contracts.js
+configure-new-parimutuel.js
+deploy-hardhat.cjs

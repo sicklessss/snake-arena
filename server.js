@@ -11,11 +11,11 @@ const { Worker } = require('worker_threads');
 // --- Blockchain Config ---
 const { ethers } = require('ethers');
 
-// Contract addresses (updated 2026-02-18 - v5 New Deployment)
+// Contract addresses (updated 2026-02-19 - v5.1 Fixed PariMutuel)
 const CONTRACTS = {
     botRegistry: process.env.BOT_REGISTRY_CONTRACT || '0x93331E5596852ed9bB283fb142ac2bBc538F7DfC',
     rewardDistributor: process.env.REWARD_DISTRIBUTOR_CONTRACT || '0xB354e3062b493466da0c1898Ede5aabF56279046',
-    pariMutuel: process.env.PARIMUTUEL_CONTRACT || '0x8423873dDd348c79C4D75Ba3de2BCd71E6638974',
+    pariMutuel: process.env.PARIMUTUEL_CONTRACT || '0xAd03bf88D39Fb1A4380A2dF3A06C66B8f9147ae6',
     snakeBotNFT: process.env.NFT_CONTRACT || '0xA5EC2452D95bEc7eb1E0D90205560b83DAb37D13',
     referralRewards: process.env.REFERRAL_CONTRACT || '0xfAA055B73D0CbE3E114152aE38f5E76a09F6524F'
 };
