@@ -2077,7 +2077,7 @@ app.post('/api/arena/kick', requireAdminKey, (req, res) => {
 });
 
 // --- Bot Registration (unlimited plays) ---
-app.post('/api/bot/register-unlimited', (req, res) => {
+app.post('/api/bot/register-unlimited', requireAdminKey, (req, res) => {
     const { botId, txHash } = req.body || {};
     if (!botId) return res.status(400).json({ error: 'missing_botId' });
     
@@ -2399,32 +2399,49 @@ app.get('/api/bot/by-name/:name', (req, res) => {
 
 // Claim bot ownership
 app.post('/api/bot/claim', async (req, res) => {
-    const { name, address } = req.body;
-    
-    if (!name || !address) {
-        return res.status(400).json({ error: 'Missing name or address' });
+    const { name, address, signature, timestamp } = req.body;
+
+    if (!name || !address || !signature || !timestamp) {
+        return res.status(400).json({ error: 'Missing name, address, signature or timestamp' });
     }
-    
+
+    // Reject stale signatures (5 minute window)
+    const ts = parseInt(timestamp);
+    if (!ts || Math.abs(Date.now() - ts) > 5 * 60 * 1000) {
+        return res.status(401).json({ error: 'auth_expired', message: 'Signature expired' });
+    }
+
+    // Verify wallet signature
+    try {
+        const message = `Claim Snake Arena Bot\nName: ${name}\nAddress: ${address}\nTimestamp: ${timestamp}`;
+        const recovered = ethers.verifyMessage(message, signature);
+        if (recovered.toLowerCase() !== address.toLowerCase()) {
+            return res.status(401).json({ error: 'invalid_signature' });
+        }
+    } catch (e) {
+        return res.status(401).json({ error: 'invalid_signature' });
+    }
+
     // Find bot by name
-    const botEntry = Object.entries(botRegistry).find(([id, bot]) => 
+    const botEntry = Object.entries(botRegistry).find(([id, bot]) =>
         bot.name.toLowerCase() === name.toLowerCase()
     );
-    
+
     if (!botEntry) {
         return res.status(404).json({ error: 'bot_not_found' });
     }
-    
+
     const [botId, bot] = botEntry;
-    
+
     // Check if already owned
     if (bot.owner) {
         return res.status(400).json({ error: 'already_claimed', message: 'This bot is already claimed' });
     }
-    
+
     // Claim ownership
     botRegistry[botId].owner = address.toLowerCase();
     saveBotRegistry();
-    
+
     res.json({
         ok: true,
         message: 'Bot claimed successfully',

@@ -1,13 +1,15 @@
 import "@nomicfoundation/hardhat-ethers";
+import { config as dotenvConfig } from "dotenv";
+dotenvConfig();
 
 /** @type import('hardhat/config').HardhatUserConfig */
 export default {
-  solidity: "0.8.19",
+  solidity: "0.8.20",
   networks: {
     baseSepolia: {
       type: "http",
       url: "https://sepolia.base.org",
-      accounts: ["ce6cf4fe0c9e4073bb5a683041563d35df40bd5e7e2bf86804ec68dd03660e31"]
+      accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : []
     }
   }
 };

@@ -66,6 +66,9 @@ contract SnakeArenaPariMutuel is Ownable, ReentrancyGuard, Pausable {
     mapping(uint256 => mapping(address => uint256)) public bettorTotalBet;
     
     mapping(address => bool) public authorizedOracles;
+
+    // Track platform fees separately to avoid withdrawing bettor funds
+    uint256 public accumulatedPlatformFees;
     
     // ============ Events ============
     
@@ -196,6 +199,7 @@ contract SnakeArenaPariMutuel is Ownable, ReentrancyGuard, Pausable {
         if (totalPool > 0) {
             // Platform rake: 5%
             platformRake = (totalPool * PLATFORM_RAKE) / PERCENTAGE_BASE;
+            accumulatedPlatformFees += platformRake;
             
             // Bot designer rewards: 3%, 1.5%, 0.5%
             uint256[3] memory botRewardPercents = [FIRST_BOT_REWARD, SECOND_BOT_REWARD, THIRD_BOT_REWARD];
@@ -398,16 +402,16 @@ contract SnakeArenaPariMutuel is Ownable, ReentrancyGuard, Pausable {
     }
     
     function withdrawPlatformFees() external onlyOwner {
-        // Calculate withdrawable: balance minus what bettors can claim
-        uint256 totalBettorClaims = 0;
-        // This is a simplification - in production track platform balance separately
-        uint256 balance = address(this).balance;
-        require(balance > 0, "No balance");
-        
-        (bool success, ) = payable(owner()).call{value: balance}("");
+        uint256 amount = accumulatedPlatformFees;
+        require(amount > 0, "No platform fees");
+        require(address(this).balance >= amount, "Insufficient balance");
+
+        accumulatedPlatformFees = 0;
+
+        (bool success, ) = payable(owner()).call{value: amount}("");
         require(success, "Withdraw failed");
-        
-        emit PlatformFeesWithdrawn(balance);
+
+        emit PlatformFeesWithdrawn(amount);
     }
     
     function setRewardDistributor(address _distributor) external onlyOwner {
