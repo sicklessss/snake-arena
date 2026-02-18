@@ -88,8 +88,12 @@ contract BotRegistry is Ownable, ReentrancyGuard {
         _;
     }
     
+    // ============ Constructor ============
+
+    constructor() Ownable(msg.sender) {}
+
     // ============ Core Functions ============
-    
+
     /**
      * @notice Set the backend wallet address (only owner)
      * @param _backendWallet New backend wallet address

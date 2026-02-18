@@ -35,7 +35,7 @@ contract ReferralRewards is Ownable {
     event FundsReceived(address indexed from, uint256 amount);
     event FundsWithdrawn(address indexed to, uint256 amount);
     
-    constructor(address _signer) Ownable() {
+    constructor(address _signer) Ownable(msg.sender) {
         require(_signer != address(0), "Invalid signer");
         signer = _signer;
         

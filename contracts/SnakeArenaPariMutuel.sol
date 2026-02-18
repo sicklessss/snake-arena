@@ -117,7 +117,7 @@ contract SnakeArenaPariMutuel is Ownable, ReentrancyGuard, Pausable {
     
     // ============ Constructor ============
     
-    constructor(address _rewardDistributor) Ownable() {
+    constructor(address _rewardDistributor) Ownable(msg.sender) {
         rewardDistributor = RewardDistributor(payable(_rewardDistributor));
     }
     

@@ -49,7 +49,7 @@ contract RewardDistributor is Ownable, ReentrancyGuard {
     
     // ============ Constructor ============
     
-    constructor(address _botRegistry) Ownable() {
+    constructor(address _botRegistry) Ownable(msg.sender) {
         botRegistry = BotRegistry(_botRegistry);
     }
     

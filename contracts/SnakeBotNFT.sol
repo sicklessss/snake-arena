@@ -18,7 +18,7 @@ contract SnakeBotNFT is ERC721, Ownable {
     
     event BotNFTMinted(uint256 indexed tokenId, bytes32 indexed botId, address indexed owner);
     
-    constructor() ERC721("SnakeBot", "SNAKE") {}
+    constructor() ERC721("SnakeBot", "SNAKE") Ownable(msg.sender) {}
     
     modifier onlyBotRegistry() {
         require(msg.sender == botRegistry, "Only BotRegistry");
@@ -46,7 +46,7 @@ contract SnakeBotNFT is ERC721, Ownable {
     }
     
     function tokenURI(uint256 tokenId) public view override returns (string memory) {
-        require(_exists(tokenId), "Token does not exist");
+        _requireOwned(tokenId);
         
         bytes32 botId = tokenIdToBot[tokenId];
         string memory botIdStr = bytes32ToString(botId);
