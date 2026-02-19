@@ -2115,6 +2115,7 @@ app.get('/api/competitive/status', (req, res) => {
         obstacleCount: room.obstacles.filter(o => o.solid).length,
         playerCount: Object.keys(room.players).length + Object.keys(room.waitingRoom).length,
         maxPlayers: room.maxPlayers,
+        entryFee: currentEntryFee,
     });
 });
 
