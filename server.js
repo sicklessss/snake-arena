@@ -2185,6 +2185,28 @@ app.post('/api/competitive/enter', (req, res) => {
 });
 
 app.post("/api/admin/reset-leaderboard", requireAdminKey, (req, res) => {    matchHistory = [];    matchNumber = 0;    fs.writeFileSync(HISTORY_FILE, "[]");    log.important("[Admin] Leaderboard reset");    res.json({ ok: true, message: "Leaderboard reset" });});
+
+// Admin: create bot on-chain for an existing local bot that missed the createBot tx
+app.post('/api/admin/create-on-chain', requireAdminKey, async (req, res) => {
+    const { botId } = req.body || {};
+    if (!botId) return res.status(400).json({ error: 'missing_botId' });
+    const bot = botRegistry[botId];
+    if (!bot) return res.status(404).json({ error: 'bot_not_found' });
+    if (!botRegistryContract) return res.status(503).json({ error: 'contract_not_ready' });
+    try {
+        const tx = await botRegistryContract.createBot(
+            ethers.encodeBytes32String(botId),
+            bot.name,
+            ethers.ZeroAddress
+        );
+        const receipt = await tx.wait();
+        log.important(`[Admin] Bot ${botId} (${bot.name}) created on-chain. tx: ${receipt.hash}`);
+        res.json({ ok: true, botId, name: bot.name, txHash: receipt.hash });
+    } catch (e) {
+        log.warn('[Admin] createBot on-chain failed:', e.message);
+        res.status(500).json({ error: 'tx_failed', message: e.message });
+    }
+});
 app.get('/api/leaderboard/global', (req, res) => {
     res.json(leaderboardFromHistory());
 });
