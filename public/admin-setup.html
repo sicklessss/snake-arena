@@ -57,15 +57,15 @@
   <div id="createBot-status"></div>
 </div>
 
-<h2>第二步：给后端钱包授权（一次性，以后不用再手动操作）</h2>
+<h2>第二步：配置 NFT 合约地址（让 Register 时自动 Mint NFT）</h2>
 <div class="card">
-  <p style="color:#888;font-size:13px">调用 BotRegistry.setBackendWallet()，授权服务器自动帮新 Bot 创建链上记录。</p>
+  <p style="color:#888;font-size:13px">调用 BotRegistry.setNFTContract()，将 SnakeBotNFT v2 地址写入 BotRegistry，之后每次用户 Register Bot 都会自动 Mint 一个 NFT。需要 BotRegistry owner 钱包签名。</p>
   <div class="field">
-    <label>_backendWallet (address) — 固定值，不用改</label>
-    <input id="backendWallet" value="0x958a640d679c5d2cdbA78EC6232a24004E227559" readonly>
+    <label>_nftContract (address) — SnakeBotNFT v2，固定值，不用改</label>
+    <input id="nftContract" value="0xF269b84543041EA350921E3e3A2Da0B14B85453C" readonly>
   </div>
-  <button onclick="setBackendWallet()">✍️ 执行 setBackendWallet</button>
-  <div id="setBackend-status"></div>
+  <button onclick="setNFTContract()">✍️ 执行 setNFTContract</button>
+  <div id="setNFT-status"></div>
 </div>
 
 <script>
@@ -206,23 +206,22 @@ async function createBot() {
   btn.disabled = false;
 }
 
-async function setBackendWallet() {
+async function setNFTContract() {
   const btn = event.target;
   btn.disabled = true;
-  setStatus("setBackend-status", "⏳ 等待钱包签名...", "info");
+  setStatus("setNFT-status", "⏳ 等待钱包签名...", "info");
   try {
-    // setBackendWallet(address) selector: 0x0edfe7ec
-    // address: 0x958a640d679c5d2cdbA78EC6232a24004E227559
-    const selector = "0edfe7ec";
-    const addr = "000000000000000000000000958a640d679c5d2cdbA78EC6232a24004E227559";
+    // setNFTContract(address) selector: keccak256("setNFTContract(address)") = 0xa7ccabdf
+    const selector = "a7ccabdf";
+    const addr = "000000000000000000000000F269b84543041EA350921E3e3A2Da0B14B85453C";
     const data = "0x" + selector + addr;
 
     const txHash = await sendTx(data);
     if (txHash) {
-      setStatus("setBackend-status", `✅ 交易已发送！<br>Hash: <a href="https://sepolia.basescan.org/tx/${txHash}" target="_blank">${txHash}</a><br>两步完成后，通知用户重新点 Register 即可。`, "ok");
+      setStatus("setNFT-status", `✅ 交易已发送！<br>Hash: <a href="https://sepolia.basescan.org/tx/${txHash}" target="_blank">${txHash}</a><br>配置完成后，用户 Register Bot 时将自动 Mint NFT。`, "ok");
     }
   } catch(e) {
-    setStatus("setBackend-status", "❌ " + (e.message || e), "err");
+    setStatus("setNFT-status", "❌ " + (e.message || e), "err");
   }
   btn.disabled = false;
 }
