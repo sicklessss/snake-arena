@@ -27,6 +27,7 @@ replays/
 snake-server.log
 
 # Deployment scripts (contain private keys - never commit)
+deploy-contracts.js
 deploy-final.js
 deploy-final2.js
 deploy-last.js
