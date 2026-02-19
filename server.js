@@ -1935,9 +1935,26 @@ function leaderboardFromHistory(filterArenaId = null) {
 }
 
 app.post('/api/bot/register', rateLimit({ windowMs: 60_000, max: 10 }), (req, res) => {
-    const { name, price, owner, botType } = req.body || {};
+    const { name, price, owner, botType, regCode } = req.body || {};
+
+    // If regCode provided, look up existing bot by its registration code
+    if (regCode) {
+        const cleanCode = regCode.toString().toUpperCase().slice(0, 8);
+        const found = Object.entries(botRegistry).find(([, m]) => m.regCode === cleanCode);
+        if (!found) {
+            return res.status(400).json({ error: 'invalid_code', message: 'Invalid or expired registration code' });
+        }
+        const [botId, botMeta] = found;
+        if (owner) {
+            botMeta.owner = owner.toString().slice(0, 64);
+            saveBotRegistry();
+        }
+        log.important('[Register] Bot ' + botMeta.name + ' (' + botId + ') claimed via regCode by ' + (owner || 'unknown'));
+        return res.json({ ok: true, botId, name: botMeta.name });
+    }
+
     const safeName = (name || 'AgentBot').toString().slice(0, MAX_NAME_LEN);
-    
+
     // Check name uniqueness
     const existingName = Object.values(botRegistry).find(m => m.name === safeName);
     if (existingName) {
