@@ -1489,7 +1489,7 @@ function createCompetitiveRoom() {
     const room = new GameRoom({ id, type: 'competitive' });
     rooms.set(id, room);
     competitiveRooms.push(room);
-    seedNormalBots(room, 6); // Fewer bots for longer matches
+    seedNormalBots(room, 10);
     
     // Periodically check and auto-fill with registered agent bots
     setInterval(() => {
