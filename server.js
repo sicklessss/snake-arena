@@ -2681,19 +2681,6 @@ app.get('/api/bot/rewards/:botId', async (req, res) => {
     }
 });
 
-// Get registration fee
-app.get('/api/bot/registration-fee', async (req, res) => {
-    try {
-        if (!botRegistryContract) {
-            return res.status(503).json({ error: 'contracts_not_initialized' });
-        }
-        const fee = await botRegistryContract.registrationFee();
-        res.json({ fee: ethers.formatEther(fee), feeWei: fee.toString() });
-    } catch (e) {
-        res.status(500).json({ error: 'query_failed', message: e.message });
-    }
-});
-
 // ============ REFERRAL SYSTEM APIs ============
 // Note: These APIs require wallet signature for authentication
 
@@ -2890,4 +2877,21 @@ server.listen(PORT, () => {
     initContracts();
     // Resume bots after a short delay (let rooms initialize)
     setTimeout(resumeRunningBots, 3000);
+    // Auto-cleanup replays: keep latest 200, run once at startup then every 24h
+    const cleanupReplays = () => {
+        try {
+            const replayDir = path.join(__dirname, 'replays');
+            if (!fs.existsSync(replayDir)) return;
+            const files = fs.readdirSync(replayDir)
+                .map(f => ({ name: f, mtime: fs.statSync(path.join(replayDir, f)).mtimeMs }))
+                .sort((a, b) => b.mtime - a.mtime); // 最新的排前面
+            const toDelete = files.slice(200);
+            toDelete.forEach(f => fs.unlinkSync(path.join(replayDir, f.name)));
+            if (toDelete.length > 0) log.important(`[Cleanup] 删除了 ${toDelete.length} 个旧回放，保留最近 ${Math.min(files.length, 200)} 个`);
+        } catch (e) {
+            log.warn('[Cleanup] 回放清理失败:', e.message);
+        }
+    };
+    cleanupReplays();
+    setInterval(cleanupReplays, 24 * 60 * 60 * 1000); // 每24小时执行一次
 });
