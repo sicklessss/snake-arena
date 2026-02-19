@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>Snake Arena - Admin Setup</title>
+<style>
+  body { background: #0a0a1a; color: #00ff88; font-family: monospace; padding: 40px; max-width: 700px; margin: 0 auto; }
+  h1 { color: #ff0055; }
+  h2 { color: #00ffcc; margin-top: 30px; border-bottom: 1px solid #333; padding-bottom: 8px; }
+  .card { background: #111; border: 1px solid #333; border-radius: 8px; padding: 20px; margin: 16px 0; }
+  .field { margin: 10px 0; }
+  .field label { display: block; color: #888; font-size: 12px; margin-bottom: 4px; }
+  .field input { width: 100%; background: #0a0a1a; border: 1px solid #444; color: #fff; padding: 8px; border-radius: 4px; font-family: monospace; font-size: 12px; box-sizing: border-box; }
+  button { background: #ff0055; color: #fff; border: none; padding: 12px 24px; border-radius: 6px; cursor: pointer; font-size: 14px; font-family: monospace; margin-top: 8px; }
+  button:hover { background: #cc0044; }
+  button:disabled { background: #555; cursor: not-allowed; }
+  .connect-btn { background: #0055ff; }
+  .connect-btn:hover { background: #0044cc; }
+  .status { margin-top: 12px; padding: 10px; border-radius: 4px; font-size: 13px; }
+  .ok { background: #0a2a0a; color: #00ff88; border: 1px solid #00ff88; }
+  .err { background: #2a0a0a; color: #ff4444; border: 1px solid #ff4444; }
+  .info { background: #0a0a2a; color: #88aaff; border: 1px solid #4466ff; }
+  .wallet-info { font-size: 12px; color: #888; margin-top: 8px; }
+  a { color: #00ffcc; }
+</style>
+</head>
+<body>
+
+<h1>🔧 Snake Arena Admin Setup</h1>
+<p style="color:#888">用 Owner 钱包完成两步链上操作，全程在浏览器完成，无需命令行。</p>
+
+<div class="card">
+  <div class="field">
+    <label>当前连接钱包</label>
+    <div id="wallet-display" class="wallet-info">未连接</div>
+  </div>
+  <button class="connect-btn" onclick="connectWallet()">🔗 连接 MetaMask</button>
+  <div id="connect-status"></div>
+</div>
+
+<h2>第一步：为 SnakeBot_v2_01 创建链上记录</h2>
+<div class="card">
+  <p style="color:#888;font-size:13px">调用 BotRegistry.createBot()，让用户钱包能正常注册这个 Bot。</p>
+  <div class="field">
+    <label>_botId (bytes32) — 固定值，不用改</label>
+    <input id="botId" value="0x626f745f7a753375703500000000000000000000000000000000000000000000" readonly>
+  </div>
+  <div class="field">
+    <label>_botName (string) — 固定值，不用改</label>
+    <input id="botName" value="SnakeBot_v2_01" readonly>
+  </div>
+  <div class="field">
+    <label>_creator (address) — 用户钱包地址，固定值，不用改</label>
+    <input id="creator" value="0xCF7C22507F5603f63Da8F4800d12EfC74C2cDf75" readonly>
+  </div>
+  <button onclick="createBot()">✍️ 执行 createBot</button>
+  <div id="createBot-status"></div>
+</div>
+
+<h2>第二步：给后端钱包授权（一次性，以后不用再手动操作）</h2>
+<div class="card">
+  <p style="color:#888;font-size:13px">调用 BotRegistry.setBackendWallet()，授权服务器自动帮新 Bot 创建链上记录。</p>
+  <div class="field">
+    <label>_backendWallet (address) — 固定值，不用改</label>
+    <input id="backendWallet" value="0x958a640d679c5d2cdbA78EC6232a24004E227559" readonly>
+  </div>
+  <button onclick="setBackendWallet()">✍️ 执行 setBackendWallet</button>
+  <div id="setBackend-status"></div>
+</div>
+
+<script>
+const CONTRACT = "0x93331E5596852ed9bB283fb142ac2bBc538F7DfC";
+const BASE_SEPOLIA_CHAIN_ID = "0x14a34"; // 84532
+
+const ABI_CREATE_BOT = {
+  name: "createBot",
+  type: "function",
+  inputs: [
+    { name: "_botId", type: "bytes32" },
+    { name: "_botName", type: "string" },
+    { name: "_creator", type: "address" }
+  ]
+};
+
+const ABI_SET_BACKEND = {
+  name: "setBackendWallet",
+  type: "function",
+  inputs: [{ name: "_backendWallet", type: "address" }]
+};
+
+function encodeABI(abi, params) {
+  // Build the call data manually using eth_call encoding
+  // We'll use window.ethereum.request with eth_sendTransaction
+  return null; // handled below
+}
+
+function setStatus(id, msg, type) {
+  const el = document.getElementById(id);
+  el.className = "status " + type;
+  el.innerHTML = msg;
+}
+
+async function connectWallet() {
+  if (!window.ethereum) {
+    setStatus("connect-status", "❌ 未检测到 MetaMask，请先安装。", "err");
+    return;
+  }
+  try {
+    const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
+    const chainId = await window.ethereum.request({ method: "eth_chainId" });
+
+    if (chainId !== BASE_SEPOLIA_CHAIN_ID) {
+      setStatus("connect-status", "⚠️ 请切换到 Base Sepolia 网络（Chain ID: 84532）", "err");
+      try {
+        await window.ethereum.request({
+          method: "wallet_switchEthereumChain",
+          params: [{ chainId: BASE_SEPOLIA_CHAIN_ID }]
+        });
+      } catch(e) {}
+    }
+
+    document.getElementById("wallet-display").textContent = accounts[0];
+    setStatus("connect-status", "✅ 已连接：" + accounts[0], "ok");
+  } catch(e) {
+    setStatus("connect-status", "❌ " + e.message, "err");
+  }
+}
+
+function encodeFunctionCall(funcSig, params) {
+  // Simple ABI encoding for our specific cases
+  // Using the interface from ethers-style encoding
+  const keccak256 = async (str) => {
+    const enc = new TextEncoder().encode(str);
+    const hash = await crypto.subtle.digest("SHA-256", enc); // not keccak, need different approach
+    return hash;
+  };
+  return null;
+}
+
+// We'll use eth_sendTransaction with pre-computed selectors
+function hexEncode(str) {
+  let hex = "";
+  for (let i = 0; i < str.length; i++) {
+    hex += str.charCodeAt(i).toString(16).padStart(2, "0");
+  }
+  return hex;
+}
+
+// Pre-computed 4-byte selectors
+// createBot(bytes32,string,address) => computed offline
+// setBackendWallet(address) => computed offline
+
+async function sendTx(data) {
+  const accounts = await window.ethereum.request({ method: "eth_accounts" });
+  if (!accounts.length) {
+    alert("请先连接钱包");
+    return null;
+  }
+  const txHash = await window.ethereum.request({
+    method: "eth_sendTransaction",
+    params: [{
+      from: accounts[0],
+      to: CONTRACT,
+      data: data,
+      gas: "0x30D40" // 200000
+    }]
+  });
+  return txHash;
+}
+
+async function createBot() {
+  const btn = event.target;
+  btn.disabled = true;
+  setStatus("createBot-status", "⏳ 等待钱包签名...", "info");
+  try {
+    // createBot(bytes32,string,address) selector: 0x46c37633
+    // Encoding:
+    // bytes32 botId: 0x626f745f7a753375703500000000000000000000000000000000000000000000
+    // string offset: 0x60 (96 bytes - after the 3 fixed slots)
+    // address creator: 0xCF7C22507F5603f63Da8F4800d12EfC74C2cDf75 (padded to 32 bytes)
+    // string length: 14 ("SnakeBot_v2_01")
+    // string data: 536e616b65426f745f76325f3031 padded to 32 bytes
+
+    const selector = "46c37633";
+    const botId = "626f745f7a753375703500000000000000000000000000000000000000000000";
+    const stringOffset = "0000000000000000000000000000000000000000000000000000000000000060";
+    const creator = "000000000000000000000000CF7C22507F5603f63Da8F4800d12EfC74C2cDf75";
+    const stringLen = "000000000000000000000000000000000000000000000000000000000000000e"; // 14
+    const stringData = "536e616b65426f745f76325f30310000000000000000000000000000000000000"; // "SnakeBot_v2_01" + 18 zero bytes = 32 bytes
+    // Actually need exactly 32 bytes padded on right
+    // "SnakeBot_v2_01" = 14 chars
+    const name = "SnakeBot_v2_01";
+    let nameHex = "";
+    for (let i = 0; i < name.length; i++) nameHex += name.charCodeAt(i).toString(16).padStart(2, "0");
+    while (nameHex.length < 64) nameHex += "00"; // pad to 32 bytes
+
+    const data = "0x" + selector + botId + stringOffset + creator + stringLen + nameHex;
+
+    const txHash = await sendTx(data);
+    if (txHash) {
+      setStatus("createBot-status", `✅ 交易已发送！<br>Hash: <a href="https://sepolia.basescan.org/tx/${txHash}" target="_blank">${txHash}</a><br>等待确认后进行第二步。`, "ok");
+    }
+  } catch(e) {
+    setStatus("createBot-status", "❌ " + (e.message || e), "err");
+  }
+  btn.disabled = false;
+}
+
+async function setBackendWallet() {
+  const btn = event.target;
+  btn.disabled = true;
+  setStatus("setBackend-status", "⏳ 等待钱包签名...", "info");
+  try {
+    // setBackendWallet(address) selector: 0x0edfe7ec
+    // address: 0x958a640d679c5d2cdbA78EC6232a24004E227559
+    const selector = "0edfe7ec";
+    const addr = "000000000000000000000000958a640d679c5d2cdbA78EC6232a24004E227559";
+    const data = "0x" + selector + addr;
+
+    const txHash = await sendTx(data);
+    if (txHash) {
+      setStatus("setBackend-status", `✅ 交易已发送！<br>Hash: <a href="https://sepolia.basescan.org/tx/${txHash}" target="_blank">${txHash}</a><br>两步完成后，通知用户重新点 Register 即可。`, "ok");
+    }
+  } catch(e) {
+    setStatus("setBackend-status", "❌ " + (e.message || e), "err");
+  }
+  btn.disabled = false;
+}
+
+// Auto-connect if already connected
+window.addEventListener("load", async () => {
+  if (window.ethereum) {
+    const accounts = await window.ethereum.request({ method: "eth_accounts" });
+    if (accounts.length) {
+      document.getElementById("wallet-display").textContent = accounts[0];
+    }
+  }
+});
+</script>
+</body>
+</html>

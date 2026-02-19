@@ -2608,31 +2608,54 @@ app.get('/api/bot/onchain/:botId', async (req, res) => {
 });
 
 // Get user's on-chain bots
+// Uses local botRegistry as source of truth for ownership (bypasses broken ownerBots mapping in contract)
 app.get('/api/user/onchain-bots', async (req, res) => {
     try {
         const { wallet } = req.query;
         if (!wallet || !ethers.isAddress(wallet)) {
             return res.status(400).json({ error: 'invalid_wallet_address' });
         }
-        if (!botRegistryContract) {
-            return res.status(503).json({ error: 'contracts_not_initialized' });
-        }
-        
-        const botIds = await botRegistryContract.getOwnerBots(wallet);
-        const bots = await Promise.all(
-            botIds.map(async (id) => {
-                const bot = await botRegistryContract.getBotById(id);
-                return {
-                    botId: ethers.decodeBytes32String(id).replace(/\0/g, ''),
-                    botName: bot.botName,
-                    registered: bot.registered,
-                    salePrice: ethers.formatEther(bot.salePrice),
-                    forSale: bot.salePrice > 0,
-                    matchesPlayed: Number(bot.matchesPlayed),
-                    totalEarnings: ethers.formatEther(bot.totalEarnings)
-                };
-            })
-        );
+
+        const walletLower = wallet.toString().toLowerCase();
+
+        // Find bots in local registry owned by this wallet
+        const localBots = Object.entries(botRegistry)
+            .filter(([, m]) => m.owner && m.owner.toLowerCase() === walletLower);
+
+        const bots = await Promise.all(localBots.map(async ([id, meta]) => {
+            let registered = false;
+            let salePrice = '0';
+            let forSale = false;
+            let matchesPlayed = 0;
+            let totalEarnings = '0';
+
+            // Try to get on-chain status for this bot
+            if (botRegistryContract) {
+                try {
+                    const onchain = await botRegistryContract.getBotById(ethers.encodeBytes32String(id));
+                    registered = onchain.registered;
+                    salePrice = ethers.formatEther(onchain.salePrice);
+                    forSale = onchain.salePrice > 0n;
+                    matchesPlayed = Number(onchain.matchesPlayed);
+                    totalEarnings = ethers.formatEther(onchain.totalEarnings);
+                } catch (e) {
+                    // Bot not on chain yet — registered stays false
+                }
+            }
+
+            return {
+                botId: id,
+                name: meta.name,       // BotSlot uses .name for display
+                botName: meta.name,
+                owner: meta.owner,     // BotSlot needs .owner for isOwner check
+                registered,
+                salePrice,
+                forSale,
+                matchesPlayed,
+                totalEarnings
+            };
+        }));
+
         res.json({ bots });
     } catch (e) {
         log.error('[API] /api/user/onchain-bots error:', e.message);
