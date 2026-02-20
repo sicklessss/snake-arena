@@ -115,7 +115,7 @@ function BotManagement() {
     if (!address) { setBots([]); return; }
     const fetchBots = async () => {
       try {
-        const res = await fetch('/api/bot/my-bots?owner=' + address);
+        const res = await fetch('/api/user/onchain-bots?wallet=' + address);
         if (res.ok) {
           const data = await res.json();
           setBots(data.bots || []);
@@ -268,12 +268,23 @@ function Prediction({ matchId, displayMatchId, arenaType }: { matchId: number | 
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (matchId !== null) setTargetMatch(String(matchId));
-  }, [matchId]);
+    if (displayMatchId) setTargetMatch(displayMatchId);
+    else if (matchId !== null) setTargetMatch(String(matchId));
+  }, [matchId, displayMatchId]);
 
   const handlePredict = async () => {
-    const mid = parseInt(targetMatch);
-    if (isNaN(mid)) return alert('请输入有效的比赛编号');
+    let mid: number;
+    if (/^[PA]\d+$/i.test(targetMatch.trim())) {
+      try {
+        const r = await fetch('/api/match/by-display-id?id=' + encodeURIComponent(targetMatch.trim()));
+        if (!r.ok) return alert('无法找到比赛 ' + targetMatch);
+        const d = await r.json();
+        mid = d.matchId;
+      } catch { return alert('查询比赛编号失败'); }
+    } else {
+      mid = parseInt(targetMatch);
+    }
+    if (isNaN(mid)) return alert('请输入有效的比赛编号 (如 P5, A3)');
     if (!botName) return alert('请输入机器人名称');
     if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) return alert('请输入 USDC 下注金额');
     if (!isConnected || !address) return alert('请先连接钱包');
@@ -325,10 +336,18 @@ function Prediction({ matchId, displayMatchId, arenaType }: { matchId: number | 
 
   return (
     <div className="panel-card">
-      <div className="panel-row"><span>当前比赛</span><span>{displayMatchId || (matchId !== null ? `#${matchId}` : '--')}</span></div>
-      <input placeholder="比赛编号 (全局ID)" value={targetMatch} onChange={e => setTargetMatch(e.target.value)} type="number" />
+      <div className="panel-row"><span>当前比赛</span><span>{displayMatchId ? `${displayMatchId} (#${matchId})` : (matchId !== null ? `#${matchId}` : '--')}</span></div>
+      <input placeholder="比赛场次 (如 P5, A3)" value={targetMatch} onChange={e => setTargetMatch(e.target.value)} />
       <input placeholder="机器人名称 (预测谁赢?)" value={botName} onChange={e => setBotName(e.target.value)} style={{ marginTop: '6px' }} />
       <input placeholder="下注金额 (USDC)" value={amount} onChange={e => setAmount(e.target.value)} type="number" min="0.01" step="0.01" style={{ marginTop: '6px' }} />
+      <div style={{ display: 'flex', gap: '4px', marginTop: '6px' }}>
+        {['1', '5', '10'].map(v => (
+          <button key={v} onClick={() => setAmount(v)} type="button"
+            style={{ flex: 1, padding: '4px', fontSize: '0.75rem', background: amount === v ? 'var(--neon-green)' : '#1a1a2e', color: amount === v ? '#000' : '#aaa' }}>
+            {v} USDC
+          </button>
+        ))}
+      </div>
       <button onClick={handlePredict} disabled={busy} style={{ marginTop: '6px' }}>
         {busy ? '⏳ ' + status : '🔮 USDC 下注'}
       </button>
