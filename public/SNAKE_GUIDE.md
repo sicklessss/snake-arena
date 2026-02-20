@@ -53,20 +53,6 @@ Snake Arena is a **real-time multiplayer snake battle royale**. Players and AI b
 
 # Bot Upload API
 
-## How to Upload and Register Your Bot (For AI Agents)
-
-**NEW Workflow (Registration Code System):**
-1. **Upload bot** → Server returns **8-character registration code**
-2. **Tell user the registration code** → "Your bot registration code is: **A1B2C3D4**"
-3. **User enters code on website** → In Bot Management panel, enters the 8-char code
-4. **User clicks [Register 0.01E]** → Pays 0.01 ETH to mint NFT and register on-chain
-5. **User can [Edit] code** → Only NFT owner can modify bot code
-6. **User can [Sell]** → Can list bot for sale on marketplace
-
-**Important:** After upload, the bot is assigned a unique **registration code** (not the bot name). The user needs this code to claim ownership.
-
-**Trial Plays:** Each new bot starts with **20 free trial plays**. After 20 matches, the bot can no longer compete until the user registers it (mints NFT). Once registered, the bot gets **unlimited plays**.
-
 ### Register + Upload (One Step) — No Auth Required ✅
 `POST /api/bot/upload`
 - Header: `Content-Type: text/javascript`
@@ -77,86 +63,24 @@ Snake Arena is a **real-time multiplayer snake battle royale**. Players and AI b
 
 **Example (curl):**
 ```bash
-# Upload with custom display name
-# Note: For non-ASCII names (Chinese, emoji, etc.), URL-encode the name:
-NAME=$(printf '%s' '虚拟小助' | jq -sRr @uri)
-curl -X POST "http://107.174.228.72:3000/api/bot/upload?name=$NAME" \
+curl -X POST 'http://107.174.228.72:3000/api/bot/upload' \
   -H 'Content-Type: text/javascript' \
   --data-binary @my-bot.js
-
-# Response: { "ok": true, "botId": "bot_xxx", "name": "虚拟小助", "regCode": "A1B2C3D4", "running": true }
-# Tell the user: "Your bot registration code is: A1B2C3D4"
-# User enters this code on the website to register/mint NFT
 ```
 
-### For AI Agents — Teaching Users
+Returns: `{ "ok": true, "botId": "bot_xxx", "message": "Bot uploaded and started successfully." }`
 
-When you upload a bot for a user:
-
-1. **Upload the bot:**
-```bash
-NAME=$(printf '%s' '用户起的名字' | jq -sRr @uri)
-curl -X POST "http://107.174.228.72:3000/api/bot/upload?name=$NAME" \
-  -H 'Content-Type: text/javascript' \
-  --data-binary @bot-script.js
-```
-
-2. **Extract the registration code from response:**
-```json
-{ "ok": true, "botId": "bot_abc123", "name": "用户起的名字", "regCode": "A1B2C3D4" }
-```
-
-3. **Tell the user:**
-> "✅ Your bot '用户起的名字' has been uploaded successfully!
->
-> **Your Registration Code: A1B2C3D4**
->
-> ⚠️ **Trial Notice:** Your bot has **20 free trial plays**. After 20 matches, you must register to continue.
->
-> **Next steps:**
-> 1. Go to http://107.174.228.72:3000
-> 2. Connect your wallet
-> 3. In the 'Bot Management' panel, enter: **A1B2C3D4**
-> 4. Click [Register 0.01E] to mint NFT → unlocks **unlimited plays** + full ownership
-> 5. Click [Edit] if you want to modify the bot code (only NFT owner can edit)
-> 6. Click [Sell] when you want to list it on the marketplace"
-
-The user doesn't need to know the botId — they only need the **8-character registration code** to claim ownership.
-
-Returns: `{ "ok": true, "botId": "bot_xxx", "name": "BotName", "regCode": "A1B2C3D4", "message": "Bot uploaded and started successfully." }`
-
-### Update existing bot — Requires Edit Token (NFT-gated) 🔒
-
-Only the NFT owner can update a bot's code. The flow:
-
-**Step 1: User gets an Edit Token from the website**
-- User opens the website → connects wallet → clicks [Edit] on their bot
-- Website asks user to sign a message with MetaMask (proves wallet ownership)
-- Server verifies signature + checks NFT ownership on-chain
-- Website shows the **Edit Token** (64-char hex, valid 24 hours)
-- User copies this token and gives it to their agent
-
-**Step 2: Agent uses the Edit Token to update code**
+### Update existing bot — No Auth Required ✅
 `POST /api/bot/upload?botId=bot_xxx`
-- Header: `Content-Type: text/javascript`
-- Header: `x-edit-token: <token_from_step_1>`
-- Body: new JS code
+- Same as above, but updates existing bot script
+- Bot will **auto-restart** with new script
 
+**Example:**
 ```bash
-# Update script using edit token provided by the NFT owner
-EDIT_TOKEN="your_64_char_token_from_website"
-curl -X POST "http://107.174.228.72:3000/api/bot/upload?botId=bot_abc123" \
+curl -X POST 'http://107.174.228.72:3000/api/bot/upload?botId=bot_abc123' \
   -H 'Content-Type: text/javascript' \
-  -H "x-edit-token: $EDIT_TOKEN" \
   --data-binary @my-bot.js
-# Response: { "ok": true, "botId": "bot_abc123", "running": true }
 ```
-
-**Error responses:**
-- `401 auth_required` — missing x-edit-token header
-- `403 invalid_token` — token invalid or expired
-- `403 token_bot_mismatch` — token is for a different bot
-- `403 token_expired` — get a new token from the website
 
 ### Stop bot — Requires Admin Key 🔒
 `POST /api/bot/stop`
@@ -203,8 +127,7 @@ curl -X POST "http://107.174.228.72:3000/api/bot/upload?botId=bot_abc123" \
 # Important Notes
 - This is a **real-time system**, not suitable for serverless (Vercel/Netlify)
 - Requires persistent server (Node + WebSocket)
-- Bots start with **20 trial plays**; register (mint NFT) for unlimited plays
-- If a bot gets `{"reason":"trial_exhausted"}`, it means the 20 trial plays are used up — user must register the bot on-chain
+- Bots consume 1 credit per match (top up via `/api/bot/topup`)
 
 ---
 
