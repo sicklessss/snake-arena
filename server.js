@@ -416,6 +416,14 @@ let perfMatchCounter = 1;
 let compMatchCounter = 1;
 let lastResetDate = new Date().toISOString().slice(0, 10);
 
+// Epoch counter — days since 2026-02-20 (launch date), starting at 1
+const EPOCH_ORIGIN = new Date('2026-02-20T00:00:00Z');
+function getCurrentEpoch() {
+    const now = new Date();
+    const diffMs = now.getTime() - EPOCH_ORIGIN.getTime();
+    return Math.max(1, Math.floor(diffMs / (24 * 60 * 60 * 1000)) + 1);
+}
+
 // Map displayMatchId → numeric matchId (for pool lookup)
 const displayIdToMatchId = {};
 
@@ -1556,6 +1564,7 @@ class GameRoom {
             obstacles: this.type === 'competitive' ? this.obstacles : [],
             matchNumber: this.matchNumber || 1,
             displayMatchId: this.displayMatchId,
+            epoch: getCurrentEpoch(),
             victoryPause: this.victoryPauseTimer > 0,
             victoryPauseTime: Math.ceil(this.victoryPauseTimer / 8),
         };
@@ -2451,6 +2460,7 @@ app.get('/api/competitive/status', (req, res) => {
         matchNumber: currentMatchId,
         internalMatchNumber: room.matchNumber,
         matchId: currentMatchId,
+        epoch: getCurrentEpoch(),
         gameState: room.gameState,
         timeLeft: room.timerSeconds,
         matchTimeLeft: room.matchTimeLeft,
