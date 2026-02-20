@@ -1,15 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { useAccount, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
-import { waitForTransactionReceipt } from '@wagmi/core';
-import { parseEther, parseUnits, stringToHex, padHex } from 'viem';
+import { parseEther, stringToHex, padHex } from 'viem';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { WagmiProvider } from 'wagmi';
 import { baseSepolia } from 'wagmi/chains';
 import { getDefaultConfig, RainbowKitProvider } from '@rainbow-me/rainbowkit';
 import '@rainbow-me/rainbowkit/styles.css';
 import './index.css';
-import { CONTRACTS, BOT_REGISTRY_ABI, PARI_MUTUEL_ABI, ERC20_ABI } from './contracts';
+import { CONTRACTS, BOT_REGISTRY_ABI } from './contracts';
 
 // --- CONFIG ---
 const config = getDefaultConfig({
@@ -253,16 +252,13 @@ function BotManagement() {
   );
 }
 
-// Prediction with USDC — sequential approve → placeBet using writeContractAsync
+// Prediction — server-side recording (on-chain PariMutuel disabled: contract reverts)
 function Prediction({ matchId, displayMatchId, arenaType }: { matchId: number | null; displayMatchId: string | null; arenaType: 'performance' | 'competitive' }) {
   const { isConnected, address } = useAccount();
   const [botName, setBotName] = useState('');
   const [targetMatch, setTargetMatch] = useState('');
-  const [amount, setAmount] = useState('1');
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
-
-  const { writeContractAsync } = useWriteContract();
 
   useEffect(() => {
     if (matchId !== null) setTargetMatch(String(matchId));
@@ -273,50 +269,19 @@ function Prediction({ matchId, displayMatchId, arenaType }: { matchId: number | 
     if (isNaN(mid)) return alert('Enter a valid Match #');
     if (!botName) return alert('Enter Bot Name');
     if (!isConnected) return alert('Connect Wallet');
-    const usdcAmount = parseFloat(amount);
-    if (isNaN(usdcAmount) || usdcAmount <= 0) return alert('Enter valid USDC amount');
-
-    const usdcUnits = parseUnits(amount, 6);
-    const botId32 = nameToBytes32(botName);
 
     setBusy(true);
     try {
-      // Step 1: Approve USDC
-      setStatus('Step 1/2: Approve USDC spending...');
-      const approveHash = await writeContractAsync({
-        address: CONTRACTS.usdc as `0x${string}`,
-        abi: ERC20_ABI,
-        functionName: 'approve',
-        args: [CONTRACTS.pariMutuel as `0x${string}`, usdcUnits],
-      });
-
-      setStatus('Waiting for approval confirmation...');
-      await waitForTransactionReceipt(config, { hash: approveHash });
-
-      // Step 2: Place bet
-      setStatus('Step 2/2: Placing prediction on-chain...');
-      const betHash = await writeContractAsync({
-        address: CONTRACTS.pariMutuel as `0x${string}`,
-        abi: PARI_MUTUEL_ABI,
-        functionName: 'placeBet',
-        args: [BigInt(mid), botId32, usdcUnits],
-      });
-
-      setStatus('Waiting for bet confirmation...');
-      await waitForTransactionReceipt(config, { hash: betHash });
-
-      // Step 3: Notify server
-      setStatus('Notifying server...');
+      setStatus('Submitting prediction...');
       const res = await fetch('/api/prediction/place', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ matchId: mid, botId: botName, amount: usdcUnits.toString(), txHash: betHash, bettor: address, arenaType })
+        body: JSON.stringify({ matchId: mid, botId: botName, amount: '0', bettor: address, arenaType })
       });
       const data = await res.json();
-      setStatus(data.ok ? '✅ Prediction Placed!' : '⚠️ Server: ' + (data.error || 'Error'));
+      setStatus(data.ok ? '✅ Prediction recorded! Points awarded if correct.' : '⚠️ ' + (data.error || 'Error'));
     } catch (e: any) {
-      const msg = e?.shortMessage || e?.message || 'Unknown error';
-      setStatus('Error: ' + msg);
+      setStatus('Error: ' + (e.message || 'Network error'));
     } finally {
       setBusy(false);
     }
@@ -326,20 +291,12 @@ function Prediction({ matchId, displayMatchId, arenaType }: { matchId: number | 
     <div className="panel-card">
       <div className="panel-row"><span>Current Match</span><span>{displayMatchId || (matchId !== null ? `#${matchId}` : '--')}</span></div>
       <input placeholder="Match # (global ID)" value={targetMatch} onChange={e => setTargetMatch(e.target.value)} type="number" />
-      <input placeholder="Bot Name" value={botName} onChange={e => setBotName(e.target.value)} style={{ marginTop: '6px' }} />
-      <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
-        {[1, 5, 10].map(val => (
-          <button key={val} onClick={() => setAmount(val.toString())}
-            style={{ flex: 1, background: amount === val.toString() ? 'var(--neon-green)' : undefined, color: amount === val.toString() ? '#000' : undefined }}>
-            {val} USDC
-          </button>
-        ))}
-      </div>
-      <input placeholder="Custom USDC Amount" value={amount} onChange={e => setAmount(e.target.value)} style={{ marginTop: '6px' }} />
+      <input placeholder="Bot Name (who will win?)" value={botName} onChange={e => setBotName(e.target.value)} style={{ marginTop: '6px' }} />
       <button onClick={handlePredict} disabled={busy} style={{ marginTop: '6px' }}>
-        {busy ? '⏳ Processing...' : '🔮 Predict (USDC)'}
+        {busy ? '⏳ Submitting...' : '🔮 Predict Winner'}
       </button>
       <div className="muted" style={{ marginTop: '6px' }}>{status}</div>
+      <div className="muted" style={{ marginTop: '4px', fontSize: '0.7rem' }}>Predict correctly to earn points. On-chain USDC betting coming soon.</div>
     </div>
   );
 }
