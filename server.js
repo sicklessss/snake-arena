@@ -2185,7 +2185,7 @@ function leaderboardFromHistory(filterArenaId = null) {
         .slice(0, 30);
 }
 
-app.post('/api/bot/register', rateLimit({ windowMs: 60_000, max: 10 }), (req, res) => {
+app.post('/api/bot/register', rateLimit({ windowMs: 60_000, max: 10 }), async (req, res) => {
     const { name, price, owner, botType, regCode } = req.body || {};
 
     // If regCode provided, look up existing bot by its registration code
@@ -2205,51 +2205,86 @@ app.post('/api/bot/register', rateLimit({ windowMs: 60_000, max: 10 }), (req, re
     }
 
     const safeName = (name || 'AgentBot').toString().slice(0, MAX_NAME_LEN);
+    const ownerAddr = (owner || 'unknown').toString().slice(0, 64).toLowerCase();
 
-    // Check name uniqueness
-    const existingName = Object.values(botRegistry).find(m => m.name === safeName);
-    if (existingName) {
-        return res.status(400).json({ error: 'name_taken', message: 'Bot name "' + safeName + '" is already in use' });
-    }
-    const safePrice = Number(price || 0);
-    const id = createBotId();
-    const newRegCode = generateRegCode();
-    botRegistry[id] = {
-        id,
-        name: safeName,
-        owner: (owner || 'unknown').toString().slice(0, 64),
-        price: isNaN(safePrice) ? 0 : safePrice,
-        botType: botType || 'agent',
-        credits: 20,
-        createdAt: Date.now(),
-        regCode: newRegCode
-    };
-    saveBotRegistry();
+    // Check if bot with this name already exists (e.g. from upload)
+    const existingEntry = Object.entries(botRegistry).find(([, m]) => m.name === safeName);
+    let id;
+    let isExisting = false;
 
-    // Create bot on-chain (non-blocking)
-    if (botRegistryContract) {
-        botRegistryContract.createBot(
-            ethers.encodeBytes32String(id),
-            safeName,
-            ethers.ZeroAddress
-        ).then(tx => tx.wait()).then(() => {
-            log.important(`[Blockchain] Bot ${id} created on-chain via /register`);
-        }).catch(err => {
-            log.warn('[Blockchain] Failed to create bot on-chain via /register:', err.message);
-        });
-    }
-
-    // auto-assign room on register (performance by default)
-    const room = assignRoomForJoin({ name: botRegistry[id].name, botType: botRegistry[id].botType, botPrice: botRegistry[id].price || 0, arenaType: 'performance' });
-    const payload = { ...botRegistry[id] };
-    payload.regCode = regCode;
-    if (room) {
-        payload.arenaId = room.id;
-        payload.wsUrl = 'ws://' + req.headers.host + '?arenaId=' + room.id;
+    if (existingEntry) {
+        const [existingId, existingBot] = existingEntry;
+        const existingOwner = (existingBot.owner || '').toLowerCase();
+        // Allow if same owner, or bot is unclaimed (owner unknown/empty)
+        if (existingOwner === ownerAddr || !existingOwner || existingOwner === 'unknown') {
+            id = existingId;
+            isExisting = true;
+            // Update owner if not set
+            if (!existingOwner || existingOwner === 'unknown') {
+                botRegistry[id].owner = ownerAddr;
+            }
+            if (botType) botRegistry[id].botType = botType;
+            saveBotRegistry();
+            log.important(`[Register] Existing bot ${safeName} (${id}) claimed by ${ownerAddr}`);
+        } else {
+            return res.status(400).json({ error: 'name_taken', message: 'Bot name "' + safeName + '" is already in use by another owner' });
+        }
     } else {
-        payload.arenaId = null;
-        payload.error = 'full_or_payment_required';
+        const safePrice = Number(price || 0);
+        id = createBotId();
+        const newRegCode = generateRegCode();
+        botRegistry[id] = {
+            id,
+            name: safeName,
+            owner: ownerAddr,
+            price: isNaN(safePrice) ? 0 : safePrice,
+            botType: botType || 'agent',
+            credits: 20,
+            createdAt: Date.now(),
+            regCode: newRegCode
+        };
+        saveBotRegistry();
     }
+
+    // Create bot on-chain (BLOCKING — wait for confirmation before responding)
+    let onChainOk = false;
+    if (botRegistryContract) {
+        try {
+            const tx = await botRegistryContract.createBot(
+                ethers.encodeBytes32String(id),
+                safeName,
+                ethers.ZeroAddress
+            );
+            await tx.wait(1, 60000);
+            log.important(`[Blockchain] Bot ${id} created on-chain via /register`);
+            onChainOk = true;
+        } catch (err) {
+            // If bot already exists on-chain, that's OK — treat as success
+            if (err.message && (err.message.includes('already exists') || err.message.includes('Bot already'))) {
+                log.important(`[Blockchain] Bot ${id} already exists on-chain, proceeding`);
+                onChainOk = true;
+            } else {
+                log.warn('[Blockchain] Failed to create bot on-chain via /register:', err.message);
+            }
+        }
+    }
+
+    // auto-assign room on register (performance by default) — only for new bots
+    if (!isExisting) {
+        const room = assignRoomForJoin({ name: botRegistry[id].name, botType: botRegistry[id].botType, botPrice: botRegistry[id].price || 0, arenaType: 'performance' });
+        const payload = { ...botRegistry[id], onChainReady: onChainOk };
+        if (room) {
+            payload.arenaId = room.id;
+            payload.wsUrl = 'ws://' + req.headers.host + '?arenaId=' + room.id;
+        } else {
+            payload.arenaId = null;
+            payload.error = 'full_or_payment_required';
+        }
+        return res.json(payload);
+    }
+
+    // For existing bots, return current state
+    const payload = { ...botRegistry[id], onChainReady: onChainOk };
     res.json(payload);
 });
 
