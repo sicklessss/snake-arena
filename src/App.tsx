@@ -20,7 +20,6 @@ const config = getDefaultConfig({
 
 const queryClient = new QueryClient();
 
-const MAX_BOT_SLOTS = 5;
 
 const PERFORMANCE_RULES = `游戏介绍
 
@@ -173,10 +172,8 @@ function BotManagement() {
     if (regError) setRegStatus('⚠️ ' + regError.message);
   }, [regConfirming, regConfirmed, regHash, regError]);
 
-  const displaySlots = Math.max(3, Math.min(MAX_BOT_SLOTS, bots.length + 1));
-
   return (
-    <div className="panel-card" style={{ maxHeight: '320px', overflowY: 'auto' }}>
+    <div className="panel-card" style={{ maxHeight: '400px', overflowY: 'auto' }}>
       <div style={{ marginBottom: '6px', color: '#fff', fontSize: '0.85rem' }}>
         Click to copy instructions for your AI bot:
       </div>
@@ -205,39 +202,34 @@ function BotManagement() {
         )}
       </div>
 
-      {/* Bot Slots */}
+      {/* Bot List */}
       <div style={{ marginTop: '10px' }}>
-        {Array.from({ length: displaySlots }).map((_, i) => {
-          const bot = bots[i];
-          if (bot) {
-            return (
-              <div key={i} style={{
-                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                padding: '6px 8px', marginBottom: '4px', borderRadius: '6px',
-                background: 'rgba(0,255,136,0.08)', border: '1px solid rgba(0,255,136,0.3)',
-              }}>
-                <span style={{ color: 'var(--neon-green)', fontWeight: 'bold', fontSize: '0.85rem' }}>
-                  🤖 {bot.name}
-                </span>
-                <span className="muted" style={{ fontSize: '0.75rem' }}>
-                  {bot.unlimited ? '∞' : (bot.credits || 0) + ' credits'}
-                </span>
-              </div>
-            );
-          }
-          return (
-            <div key={i} style={{
-              padding: '6px 8px', marginBottom: '4px', borderRadius: '6px',
-              background: 'rgba(255,255,255,0.03)', border: '1px dashed #2a2a3a',
-              color: '#555', fontSize: '0.8rem', textAlign: 'center',
-            }}>
-              Empty Slot {i + 1}/{MAX_BOT_SLOTS}
-            </div>
-          );
-        })}
+        {bots.length === 0 && (
+          <div style={{
+            padding: '6px 8px', marginBottom: '4px', borderRadius: '6px',
+            background: 'rgba(255,255,255,0.03)', border: '1px dashed #2a2a3a',
+            color: '#555', fontSize: '0.8rem', textAlign: 'center',
+          }}>
+            No bots yet — register one below
+          </div>
+        )}
+        {bots.map((bot, i) => (
+          <div key={bot.botId || i} style={{
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            padding: '6px 8px', marginBottom: '4px', borderRadius: '6px',
+            background: 'rgba(0,255,136,0.08)', border: '1px solid rgba(0,255,136,0.3)',
+          }}>
+            <span style={{ color: 'var(--neon-green)', fontWeight: 'bold', fontSize: '0.85rem' }}>
+              🤖 {bot.name}
+            </span>
+            <span className="muted" style={{ fontSize: '0.75rem' }}>
+              {bot.unlimited ? '∞' : (bot.credits || 0) + ' credits'}
+            </span>
+          </div>
+        ))}
       </div>
 
-      {bots.length < MAX_BOT_SLOTS && (
+      {(
         <div style={{ display: 'flex', gap: '6px', marginTop: '8px', alignItems: 'center' }}>
           <input placeholder="Bot Name" value={newName} onChange={e => setNewName(e.target.value)} style={{ flex: 1 }} />
           <button
