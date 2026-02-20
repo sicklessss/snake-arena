@@ -65,6 +65,8 @@ Snake Arena is a **real-time multiplayer snake battle royale**. Players and AI b
 
 **Important:** After upload, the bot is assigned a unique **registration code** (not the bot name). The user needs this code to claim ownership.
 
+**Trial Plays:** Each new bot starts with **20 free trial plays**. After 20 matches, the bot can no longer compete until the user registers it (mints NFT). Once registered, the bot gets **unlimited plays**.
+
 ### Register + Upload (One Step) — No Auth Required ✅
 `POST /api/bot/upload`
 - Header: `Content-Type: text/javascript`
@@ -106,35 +108,55 @@ curl -X POST "http://107.174.228.72:3000/api/bot/upload?name=$NAME" \
 
 3. **Tell the user:**
 > "✅ Your bot '用户起的名字' has been uploaded successfully!
-> 
+>
 > **Your Registration Code: A1B2C3D4**
-> 
+>
+> ⚠️ **Trial Notice:** Your bot has **20 free trial plays**. After 20 matches, you must register to continue.
+>
 > **Next steps:**
 > 1. Go to http://107.174.228.72:3000
 > 2. Connect your wallet
 > 3. In the 'Bot Management' panel, enter: **A1B2C3D4**
-> 4. Click [Register 0.01E] to mint NFT and register on-chain
-> 5. Click [Edit] if you want to modify the bot code (only owner can edit)
+> 4. Click [Register 0.01E] to mint NFT → unlocks **unlimited plays** + full ownership
+> 5. Click [Edit] if you want to modify the bot code (only NFT owner can edit)
 > 6. Click [Sell] when you want to list it on the marketplace"
 
 The user doesn't need to know the botId — they only need the **8-character registration code** to claim ownership.
 
 Returns: `{ "ok": true, "botId": "bot_xxx", "name": "BotName", "regCode": "A1B2C3D4", "message": "Bot uploaded and started successfully." }`
 
-### Update existing bot — Requires NFT Ownership 🔒
-`POST /api/bot/upload?botId=bot_xxx&owner=0x...`
-- Same as above, but updates existing bot script
-- **Requires**: `owner` parameter must match the NFT owner address
-- Bot will **auto-restart** with new script
-- Can also update the display name with `&name=NewName` (URL-encode non-ASCII names)
+### Update existing bot — Requires Edit Token (NFT-gated) 🔒
 
-**Example:**
+Only the NFT owner can update a bot's code. The flow:
+
+**Step 1: User gets an Edit Token from the website**
+- User opens the website → connects wallet → clicks [Edit] on their bot
+- Website asks user to sign a message with MetaMask (proves wallet ownership)
+- Server verifies signature + checks NFT ownership on-chain
+- Website shows the **Edit Token** (64-char hex, valid 24 hours)
+- User copies this token and gives it to their agent
+
+**Step 2: Agent uses the Edit Token to update code**
+`POST /api/bot/upload?botId=bot_xxx`
+- Header: `Content-Type: text/javascript`
+- Header: `x-edit-token: <token_from_step_1>`
+- Body: new JS code
+
 ```bash
-# Update script (only NFT owner can do this)
-curl -X POST 'http://107.174.228.72:3000/api/bot/upload?botId=bot_abc123&owner=0xYourWalletAddress' \
+# Update script using edit token provided by the NFT owner
+EDIT_TOKEN="your_64_char_token_from_website"
+curl -X POST "http://107.174.228.72:3000/api/bot/upload?botId=bot_abc123" \
   -H 'Content-Type: text/javascript' \
+  -H "x-edit-token: $EDIT_TOKEN" \
   --data-binary @my-bot.js
+# Response: { "ok": true, "botId": "bot_abc123", "running": true }
 ```
+
+**Error responses:**
+- `401 auth_required` — missing x-edit-token header
+- `403 invalid_token` — token invalid or expired
+- `403 token_bot_mismatch` — token is for a different bot
+- `403 token_expired` — get a new token from the website
 
 ### Stop bot — Requires Admin Key 🔒
 `POST /api/bot/stop`
@@ -181,7 +203,8 @@ curl -X POST 'http://107.174.228.72:3000/api/bot/upload?botId=bot_abc123&owner=0
 # Important Notes
 - This is a **real-time system**, not suitable for serverless (Vercel/Netlify)
 - Requires persistent server (Node + WebSocket)
-- Bots consume 1 credit per match (top up via `/api/bot/topup`)
+- Bots start with **20 trial plays**; register (mint NFT) for unlimited plays
+- If a bot gets `{"reason":"trial_exhausted"}`, it means the 20 trial plays are used up — user must register the bot on-chain
 
 ---
 

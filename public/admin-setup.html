@@ -38,23 +38,15 @@
   <div id="connect-status"></div>
 </div>
 
-<h2>第一步：为 SnakeBot_v2_01 创建链上记录</h2>
+<h2>第一步：授权后端钱包可以创建 Bot 链上记录</h2>
 <div class="card">
-  <p style="color:#888;font-size:13px">调用 BotRegistry.createBot()，让用户钱包能正常注册这个 Bot。</p>
+  <p style="color:#888;font-size:13px">调用 BotRegistry.setBackendWallet()，让后端服务器钱包能自动调用 createBot()。每次用户上传 bot 脚本时，服务器会自动在链上创建记录，用户才能用注册码完成链上注册。</p>
   <div class="field">
-    <label>_botId (bytes32) — 固定值，不用改</label>
-    <input id="botId" value="0x626f745f7a753375703500000000000000000000000000000000000000000000" readonly>
+    <label>_backendWallet (address) — 服务器钱包，固定值，不用改</label>
+    <input id="backendWalletAddr" value="0x958a640d679c5d2cdbA78EC6232a24004E227559" readonly>
   </div>
-  <div class="field">
-    <label>_botName (string) — 固定值，不用改</label>
-    <input id="botName" value="SnakeBot_v2_01" readonly>
-  </div>
-  <div class="field">
-    <label>_creator (address) — 用户钱包地址，固定值，不用改</label>
-    <input id="creator" value="0xCF7C22507F5603f63Da8F4800d12EfC74C2cDf75" readonly>
-  </div>
-  <button onclick="createBot()">✍️ 执行 createBot</button>
-  <div id="createBot-status"></div>
+  <button onclick="setBackendWallet()">✍️ 执行 setBackendWallet</button>
+  <div id="setBackend-status"></div>
 </div>
 
 <h2>第二步：配置 NFT 合约地址（让 Register 时自动 Mint NFT）</h2>
@@ -68,8 +60,24 @@
   <div id="setNFT-status"></div>
 </div>
 
+<h2>第三步：授权后端钱包为 PariMutuel Oracle（让服务器能创建/结算比赛押注）</h2>
+<div class="card">
+  <p style="color:#888;font-size:13px">调用 SnakeArenaPariMutuel.authorizeOracle()，让后端服务器钱包能自动在链上创建比赛（createMatch）和结算押注（settleMatch）。需要 PariMutuel owner 钱包签名。</p>
+  <div class="field">
+    <label>PariMutuel 合约地址</label>
+    <input value="0xAd03bf88D39Fb1A4380A2dF3A06C66B8f9147ae6" readonly>
+  </div>
+  <div class="field">
+    <label>_oracle (address) — 服务器钱包，固定值，不用改</label>
+    <input id="oracleAddr" value="0x958a640d679c5d2cdbA78EC6232a24004E227559" readonly>
+  </div>
+  <button onclick="authorizeOracle()">✍️ 执行 authorizeOracle</button>
+  <div id="setOracle-status"></div>
+</div>
+
 <script>
-const CONTRACT = "0x93331E5596852ed9bB283fb142ac2bBc538F7DfC";
+const CONTRACT = "0x25DEA1962A7A3a5fC4E1956E05b5eADE609E0800";
+const PARIMUTUEL_CONTRACT = "0xAd03bf88D39Fb1A4380A2dF3A06C66B8f9147ae6";
 const BASE_SEPOLIA_CHAIN_ID = "0x14a34"; // 84532
 
 const ABI_CREATE_BOT = {
@@ -150,7 +158,7 @@ function hexEncode(str) {
 // createBot(bytes32,string,address) => computed offline
 // setBackendWallet(address) => computed offline
 
-async function sendTx(data) {
+async function sendTx(data, toContract) {
   const accounts = await window.ethereum.request({ method: "eth_accounts" });
   if (!accounts.length) {
     alert("请先连接钱包");
@@ -160,7 +168,7 @@ async function sendTx(data) {
     method: "eth_sendTransaction",
     params: [{
       from: accounts[0],
-      to: CONTRACT,
+      to: toContract || CONTRACT,
       data: data,
       gas: "0x30D40" // 200000
     }]
@@ -168,40 +176,23 @@ async function sendTx(data) {
   return txHash;
 }
 
-async function createBot() {
+async function setBackendWallet() {
   const btn = event.target;
   btn.disabled = true;
-  setStatus("createBot-status", "⏳ 等待钱包签名...", "info");
+  setStatus("setBackend-status", "⏳ 等待钱包签名...", "info");
   try {
-    // createBot(bytes32,string,address) selector: 0x46c37633
-    // Encoding:
-    // bytes32 botId: 0x626f745f7a753375703500000000000000000000000000000000000000000000
-    // string offset: 0x60 (96 bytes - after the 3 fixed slots)
-    // address creator: 0xCF7C22507F5603f63Da8F4800d12EfC74C2cDf75 (padded to 32 bytes)
-    // string length: 14 ("SnakeBot_v2_01")
-    // string data: 536e616b65426f745f76325f3031 padded to 32 bytes
-
-    const selector = "46c37633";
-    const botId = "626f745f7a753375703500000000000000000000000000000000000000000000";
-    const stringOffset = "0000000000000000000000000000000000000000000000000000000000000060";
-    const creator = "000000000000000000000000CF7C22507F5603f63Da8F4800d12EfC74C2cDf75";
-    const stringLen = "000000000000000000000000000000000000000000000000000000000000000e"; // 14
-    const stringData = "536e616b65426f745f76325f30310000000000000000000000000000000000000"; // "SnakeBot_v2_01" + 18 zero bytes = 32 bytes
-    // Actually need exactly 32 bytes padded on right
-    // "SnakeBot_v2_01" = 14 chars
-    const name = "SnakeBot_v2_01";
-    let nameHex = "";
-    for (let i = 0; i < name.length; i++) nameHex += name.charCodeAt(i).toString(16).padStart(2, "0");
-    while (nameHex.length < 64) nameHex += "00"; // pad to 32 bytes
-
-    const data = "0x" + selector + botId + stringOffset + creator + stringLen + nameHex;
+    // setBackendWallet(address) selector: keccak256("setBackendWallet(address)").slice(0,4)
+    // = 0x3b88e19b
+    const selector = "0edfe7ec";
+    const addr = "000000000000000000000000958a640d679c5d2cdbA78EC6232a24004E227559";
+    const data = "0x" + selector + addr;
 
     const txHash = await sendTx(data);
     if (txHash) {
-      setStatus("createBot-status", `✅ 交易已发送！<br>Hash: <a href="https://sepolia.basescan.org/tx/${txHash}" target="_blank">${txHash}</a><br>等待确认后进行第二步。`, "ok");
+      setStatus("setBackend-status", `✅ 交易已发送！<br>Hash: <a href="https://sepolia.basescan.org/tx/${txHash}" target="_blank">${txHash}</a><br>确认后，服务器将能自动在链上创建 bot 记录。`, "ok");
     }
   } catch(e) {
-    setStatus("createBot-status", "❌ " + (e.message || e), "err");
+    setStatus("setBackend-status", "❌ " + (e.message || e), "err");
   }
   btn.disabled = false;
 }
@@ -222,6 +213,26 @@ async function setNFTContract() {
     }
   } catch(e) {
     setStatus("setNFT-status", "❌ " + (e.message || e), "err");
+  }
+  btn.disabled = false;
+}
+
+async function authorizeOracle() {
+  const btn = event.target;
+  btn.disabled = true;
+  setStatus("setOracle-status", "⏳ 等待钱包签名...", "info");
+  try {
+    // authorizeOracle(address) selector: keccak256("authorizeOracle(address)") = 0x0f13b763
+    const selector = "0f13b763";
+    const addr = "000000000000000000000000958a640d679c5d2cdbA78EC6232a24004E227559";
+    const data = "0x" + selector + addr;
+
+    const txHash = await sendTx(data, PARIMUTUEL_CONTRACT);
+    if (txHash) {
+      setStatus("setOracle-status", `✅ 交易已发送！<br>Hash: <a href="https://sepolia.basescan.org/tx/${txHash}" target="_blank">${txHash}</a><br>确认后，服务器将能自动创建和结算链上比赛，观众可以押注。`, "ok");
+    }
+  } catch(e) {
+    setStatus("setOracle-status", "❌ " + (e.message || e), "err");
   }
   btn.disabled = false;
 }

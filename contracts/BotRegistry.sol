@@ -79,7 +79,7 @@ contract BotRegistry is Ownable, ReentrancyGuard {
     }
     
     modifier botExists(bytes32 _botId) {
-        require(bots[_botId].owner != address(0), "Bot does not exist");
+        require(bots[_botId].botId != bytes32(0), "Bot does not exist");
         _;
     }
     

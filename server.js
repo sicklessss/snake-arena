@@ -13,10 +13,10 @@ const { ethers } = require('ethers');
 
 // Contract addresses (updated 2026-02-19 - v5.1 Fixed PariMutuel)
 const CONTRACTS = {
-    botRegistry: process.env.BOT_REGISTRY_CONTRACT || '0x93331E5596852ed9bB283fb142ac2bBc538F7DfC',
+    botRegistry: process.env.BOT_REGISTRY_CONTRACT || '0x25DEA1962A7A3a5fC4E1956E05b5eADE609E0800',
     rewardDistributor: process.env.REWARD_DISTRIBUTOR_CONTRACT || '0xB354e3062b493466da0c1898Ede5aabF56279046',
-    pariMutuel: process.env.PARIMUTUEL_CONTRACT || '0xAd03bf88D39Fb1A4380A2dF3A06C66B8f9147ae6',
-    snakeBotNFT: process.env.NFT_CONTRACT || '0xA5EC2452D95bEc7eb1E0D90205560b83DAb37D13',
+    pariMutuel: process.env.PARIMUTUEL_CONTRACT || '0x1fDDd7CC864F85B20F1EF27221B5DD6C5Ffe413d',
+    snakeBotNFT: process.env.NFT_CONTRACT || '0xF269b84543041EA350921E3e3A2Da0B14B85453C',
     referralRewards: process.env.REFERRAL_CONTRACT || '0xfAA055B73D0CbE3E114152aE38f5E76a09F6524F'
 };
 
@@ -49,8 +49,19 @@ const SNAKE_BOT_NFT_ABI = [
     "function tokenURI(uint256 tokenId) external view returns (string memory)",
     "function ownerOf(uint256 tokenId) external view returns (address)",
     "function botToTokenId(bytes32) external view returns (uint256)",
-    "function tokenIdToBot(uint256) external view returns (bytes32)"
+    "function tokenIdToBot(uint256) external view returns (bytes32)",
+    "function getBotsByOwner(address _owner) external view returns (bytes32[] memory)"
 ];
+
+// Edit token store: token -> { botId, address, expires }
+const editTokens = new Map();
+// Clean up expired tokens every hour
+setInterval(() => {
+    const now = Date.now();
+    for (const [token, data] of editTokens.entries()) {
+        if (data.expires < now) editTokens.delete(token);
+    }
+}, 3600_000);
 
 const REFERRAL_REWARDS_ABI = [
     "function claim(uint256 amount, uint256 nonce, bytes calldata signature) external",
@@ -61,11 +72,29 @@ const REFERRAL_REWARDS_ABI = [
     "event Claimed(address indexed user, uint256 amount, uint256 nonce, uint256 newTotalClaimed)"
 ];
 
+const PARI_MUTUEL_ABI = [
+    "function createMatch(uint256 _matchId, uint256 _startTime) external",
+    "function settleMatch(uint256 _matchId, bytes32[] calldata _winners) external",
+    "function cancelMatch(uint256 _matchId, string calldata _reason) external",
+    "function placeBet(uint256 _matchId, bytes32 _botId, uint256 _amount) external",
+    "function claimWinnings(uint256 _matchId) external",
+    "function claimRefund(uint256 _matchId) external",
+    "function authorizeOracle(address _oracle) external",
+    "function matches(uint256) external view returns (uint256 matchId, uint256 startTime, uint256 endTime, uint256 totalPool, bool settled, bool cancelled)",
+    "function getUserPotentialWinnings(uint256 _matchId, address _bettor) external view returns (uint256)",
+    "function getMatchBets(uint256 _matchId) external view returns (tuple(address bettor, bytes32 botId, uint256 amount, bool claimed)[])",
+    "function botTotalBets(uint256, bytes32) external view returns (uint256)",
+    "function getCurrentOdds(uint256 _matchId, bytes32 _botId) external view returns (uint256)",
+    "event BetPlaced(uint256 indexed matchId, address indexed bettor, bytes32 indexed botId, uint256 amount, uint256 betIndex)",
+    "event MatchSettled(uint256 indexed matchId, bytes32[] winners, uint256 totalPool, uint256 platformRake, uint256 botRewards)"
+];
+
 // Initialize contracts
 let botRegistryContract = null;
 let rewardDistributorContract = null;
 let snakeBotNFTContract = null;
 let referralRewardsContract = null;
+let pariMutuelContract = null;
 
 function initContracts() {
     if (backendWallet && CONTRACTS.botRegistry !== '0x0000000000000000000000000000000000000000') {
@@ -73,7 +102,47 @@ function initContracts() {
         rewardDistributorContract = new ethers.Contract(CONTRACTS.rewardDistributor, REWARD_DISTRIBUTOR_ABI, provider);
         snakeBotNFTContract = new ethers.Contract(CONTRACTS.snakeBotNFT, SNAKE_BOT_NFT_ABI, provider);
         referralRewardsContract = new ethers.Contract(CONTRACTS.referralRewards, REFERRAL_REWARDS_ABI, provider);
-        log.important(`[Blockchain] Contracts initialized. Registry: ${CONTRACTS.botRegistry}, NFT: ${CONTRACTS.snakeBotNFT}, Referral: ${CONTRACTS.referralRewards}`);
+        pariMutuelContract = new ethers.Contract(CONTRACTS.pariMutuel, PARI_MUTUEL_ABI, backendWallet);
+        log.important(`[Blockchain] Contracts initialized. Registry: ${CONTRACTS.botRegistry}, NFT: ${CONTRACTS.snakeBotNFT}, PariMutuel: ${CONTRACTS.pariMutuel}`);
+
+        // Poll for BotRegistered events every 30s (reliable on public RPC, no filter expiry issues)
+        let lastCheckedBlock = null;
+        async function pollBotRegisteredEvents() {
+            try {
+                const currentBlock = await provider.getBlockNumber();
+                if (lastCheckedBlock === null) {
+                    lastCheckedBlock = currentBlock; // start from now
+                    return;
+                }
+                if (currentBlock <= lastCheckedBlock) return;
+                const fromBlock = lastCheckedBlock + 1;
+                const toBlock = currentBlock;
+                const events = await botRegistryContract.queryFilter('BotRegistered', fromBlock, toBlock);
+                for (const evt of events) {
+                    try {
+                        const [botIdBytes32, ownerAddr] = evt.args;
+                        const botId = ethers.decodeBytes32String(botIdBytes32).replace(/\0/g, '');
+                        const bot = botRegistry[botId];
+                        if (bot) {
+                            bot.unlimited = true;
+                            bot.credits = 999999;
+                            saveBotRegistry();
+                            log.important(`[Blockchain] BotRegistered: ${bot.name} (${botId}) → unlimited plays granted. Owner: ${ownerAddr}`);
+                        } else {
+                            log.warn(`[Blockchain] BotRegistered event for unknown local botId: ${botId}`);
+                        }
+                    } catch (e) {
+                        log.error('[Blockchain] BotRegistered event parse error:', e.message);
+                    }
+                }
+                lastCheckedBlock = toBlock;
+            } catch (e) {
+                log.warn('[Blockchain] pollBotRegisteredEvents error:', e.message);
+            }
+        }
+        setInterval(pollBotRegisteredEvents, 30_000);
+        pollBotRegisteredEvents(); // initial run
+        log.important('[Blockchain] Polling for BotRegistered events every 30s...');
     } else {
         log.warn('[Blockchain] Contracts not initialized - set env vars or deploy contracts');
     }
@@ -123,6 +192,30 @@ function saveReferralData() {
     }
 }
 loadReferralData();
+
+// --- Points System ---
+const POINTS_DATA_FILE = path.join(__dirname, 'data', 'points.json');
+let pointsData = {}; // { walletAddress: { points: 0, history: [] } }
+function loadPoints() {
+    try {
+        if (fs.existsSync(POINTS_DATA_FILE)) {
+            pointsData = JSON.parse(fs.readFileSync(POINTS_DATA_FILE, 'utf8'));
+            log.info(`[Points] Loaded ${Object.keys(pointsData).length} point records`);
+        }
+    } catch (e) {
+        log.error('[Points] Failed to load data:', e.message);
+    }
+}
+function savePoints() {
+    try {
+        const dataDir = path.dirname(POINTS_DATA_FILE);
+        if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+        fs.writeFileSync(POINTS_DATA_FILE, JSON.stringify(pointsData, null, 2));
+    } catch (e) {
+        log.error('[Points] Failed to save data:', e.message);
+    }
+}
+loadPoints();
 
 // Record referral registration
 function recordReferral(user, inviter, txHash, amount) {
@@ -314,6 +407,79 @@ function nextMatchId() {
     matchNumber++;
     return id;
 }
+
+// Per-type display counters (reset daily at UTC midnight)
+let perfMatchCounter = 1;
+let compMatchCounter = 1;
+let lastResetDate = new Date().toISOString().slice(0, 10);
+
+// Map displayMatchId → numeric matchId (for pool lookup)
+const displayIdToMatchId = {};
+
+function getNextDisplayId(type) {
+    const displayId = type === 'competitive' ? ('A' + compMatchCounter++) : ('P' + perfMatchCounter++);
+    return displayId;
+}
+
+function registerDisplayId(displayId, matchId) {
+    displayIdToMatchId[displayId] = matchId;
+    // Keep only last 200 entries
+    const keys = Object.keys(displayIdToMatchId);
+    if (keys.length > 200) delete displayIdToMatchId[keys[0]];
+}
+
+// --- Sequential blockchain TX queue (prevents nonce collisions) ---
+// fn receives txOverrides = { nonce } so each call uses the correct pending nonce
+const _txQueue = [];
+let _txRunning = false;
+function enqueueTx(label, fn) {
+    _txQueue.push({ label, fn });
+    if (!_txRunning) _drainTxQueue();
+}
+async function _drainTxQueue() {
+    _txRunning = true;
+    try {
+        while (_txQueue.length > 0) {
+            const { label, fn } = _txQueue.shift();
+            try {
+                // Use 'pending' nonce so we don't collide with stuck mempool txs
+                // Also use 3x gas to ensure fast inclusion and avoid replacement-fee issues
+                let overrides = {};
+                if (backendWallet) {
+                    const pendingNonce = await backendWallet.provider.getTransactionCount(backendWallet.address, 'pending');
+                    const feeData = await backendWallet.provider.getFeeData();
+                    overrides = {
+                        nonce: pendingNonce,
+                        maxFeePerGas: (feeData.maxFeePerGas || ethers.parseUnits('10', 'gwei')) * 3n,
+                        maxPriorityFeePerGas: (feeData.maxPriorityFeePerGas || ethers.parseUnits('2', 'gwei')) * 3n,
+                    };
+                }
+                await fn(overrides);
+            } catch (e) {
+                log.warn('[TxQueue] ' + label + ' failed: ' + e.message);
+            }
+        }
+    } finally {
+        // Always reset _txRunning so future enqueued items can start the drain
+        _txRunning = false;
+    }
+}
+
+function checkDailyReset() {
+    const today = new Date().toISOString().slice(0, 10);
+    if (today !== lastResetDate) {
+        lastResetDate = today;
+        perfMatchCounter = 1;
+        compMatchCounter = 1;
+        for (const [, room] of rooms) {
+            if (room.type === 'competitive') {
+                room.paidEntries = {};
+            }
+        }
+        log.important('[DailyReset] Match counters reset for: ' + today);
+    }
+}
+setInterval(checkDailyReset, 60_000);
 
 function saveHistory(arenaId, winnerName, score) {
     matchHistory.unshift({
@@ -525,6 +691,8 @@ class GameRoom {
         this.winner = null;
         this.timerSeconds = 5;
         this.currentMatchId = nextMatchId();
+        this.displayMatchId = getNextDisplayId(type);
+        registerDisplayId(this.displayMatchId, this.currentMatchId);
         this.victoryPauseTimer = 0;
         this.lastSurvivorForVictory = null;
         this.replayFrames = []; // Record frames for replay
@@ -1081,17 +1249,74 @@ class GameRoom {
         this.winner = survivor ? survivor.name : 'No Winner';
         this.timerSeconds = 5;
         saveHistory(this.id, this.winner, survivor ? survivor.score : 0);
-        
+
         // Save replay
         this.saveReplay(survivor);
-        
+
+        // Determine top 3 placements for betting settlement
+        // 1st = survivor, 2nd/3rd = last to die (by deathTime descending)
+        const allPlayers = Object.values(this.players);
+        const dead = allPlayers
+            .filter(p => !p.alive && p.deathTime && p.botId)
+            .sort((a, b) => b.deathTime - a.deathTime); // most recently dead first
+
+        const placements = [];
+        if (survivor && survivor.botId) placements.push(survivor.botId);
+        for (const p of dead) {
+            if (placements.length >= 3) break;
+            if (p.botId && !placements.includes(p.botId)) placements.push(p.botId);
+        }
+
         this.sendEvent('match_end', {
             matchId: this.currentMatchId,
             winnerBotId: survivor ? survivor.botId || null : null,
             winnerName: this.winner,
             arenaId: this.id,
             arenaType: this.type,
+            placements, // [1st botId, 2nd botId, 3rd botId]
         });
+
+        // Settle match on-chain for betting payouts
+        if (pariMutuelContract && (this.type === 'performance' || this.type === 'competitive') && placements.length > 0) {
+            const matchId = this.currentMatchId;
+            const arenaType = this.type;
+            const winnersBytes32 = placements.map(id => {
+                try { return ethers.encodeBytes32String(id.slice(0, 31)); }
+                catch { return ethers.ZeroHash; }
+            }).filter(h => h !== ethers.ZeroHash);
+
+            if (winnersBytes32.length > 0) {
+                enqueueTx(`settleMatch #${matchId}`, async (overrides) => {
+                    const tx = await pariMutuelContract.settleMatch(matchId, winnersBytes32, overrides);
+                    await tx.wait(1, 120000);
+                    log.important(`[Betting] Match #${matchId} (${arenaType}) settled on-chain. Placements: ${placements.join(', ')}`);
+                    // Award points for competitive arena bets that picked the winner
+                    if (arenaType === 'competitive' && placements.length > 0) {
+                        const winnerBotId = placements[0];
+                        const bets = betRecords[matchId] || [];
+                        let pointsAwarded = 0;
+                        for (const bet of bets) {
+                            if (bet.botId === winnerBotId && bet.bettor && bet.bettor !== 'anonymous') {
+                                const addr = bet.bettor.toLowerCase();
+                                const usdcAmount = Math.floor(Number(bet.amount) / 1e6);
+                                if (usdcAmount > 0) {
+                                    if (!pointsData[addr]) pointsData[addr] = { points: 0, history: [] };
+                                    pointsData[addr].points += usdcAmount;
+                                    pointsData[addr].history.push({
+                                        matchId, amount: usdcAmount, type: 'bet_win', ts: Date.now()
+                                    });
+                                    pointsAwarded += usdcAmount;
+                                }
+                            }
+                        }
+                        if (pointsAwarded > 0) {
+                            savePoints();
+                            log.important(`[Points] Awarded ${pointsAwarded} points for match #${matchId}`);
+                        }
+                    }
+                });
+            }
+        }
     }
 
     saveReplay(survivor) {
@@ -1174,6 +1399,8 @@ class GameRoom {
 
         this.players = {};
         this.currentMatchId = nextMatchId();
+        this.displayMatchId = getNextDisplayId(this.type);
+        registerDisplayId(this.displayMatchId, this.currentMatchId);
         this.victoryPauseTimer = 0;
         this.lastSurvivorForVictory = null;
         this.matchTimeLeft = MATCH_DURATION;
@@ -1266,6 +1493,17 @@ class GameRoom {
         this.timerSeconds = 0;
         this.matchTimeLeft = MATCH_DURATION;
         this.sendEvent('match_start', { matchId: this.currentMatchId, arenaId: this.id, arenaType: this.type });
+
+        // Create match on-chain for betting (queued to avoid nonce collisions)
+        if (pariMutuelContract && (this.type === 'performance' || this.type === 'competitive')) {
+            const matchId = this.currentMatchId;
+            const startTime = Math.floor(Date.now() / 1000) + 30; // +30s buffer so block.timestamp check passes
+            enqueueTx(`createMatch #${matchId}`, async (overrides) => {
+                const tx = await pariMutuelContract.createMatch(matchId, startTime, overrides);
+                await tx.wait(1, 120000);
+                log.important(`[Betting] Match #${matchId} (${this.type}) created on-chain`);
+            });
+        }
     }
 
     broadcastState() {
@@ -1314,6 +1552,7 @@ class GameRoom {
             food: this.food,
             obstacles: this.type === 'competitive' ? this.obstacles : [],
             matchNumber: this.matchNumber || 1,
+            displayMatchId: this.displayMatchId,
             victoryPause: this.victoryPauseTimer > 0,
             victoryPauseTime: Math.ceil(this.victoryPauseTimer / 8),
         };
@@ -1381,7 +1620,7 @@ class GameRoom {
         }
 
         if (this.type === 'performance' && botType === 'agent' && botMeta) {
-            if (botMeta.credits <= 0) return { ok: false, reason: 'topup_required' };
+            if (botMeta.credits <= 0) return { ok: false, reason: 'trial_exhausted', message: 'Trial plays used up. Register your bot (mint NFT) for unlimited plays.' };
             botMeta.credits -= 1;
             saveBotRegistry();
             if (ws && ws.readyState === 1) {
@@ -1508,8 +1747,8 @@ function autoFillCompetitiveRoom(room) {
         if (p.botId) currentBotIds.add(p.botId);
     });
     
-    // Check paid entries for this match
-    const paidForMatch = room.paidEntries[room.matchNumber] || [];
+    // Check paid entries for this match (keyed by displayMatchId string)
+    const paidForMatch = room.paidEntries[room.displayMatchId] || [];
     
     // Add paid entries first
     for (const botId of paidForMatch) {
@@ -1968,7 +2207,7 @@ app.post('/api/bot/register', rateLimit({ windowMs: 60_000, max: 10 }), (req, re
         owner: (owner || 'unknown').toString().slice(0, 64),
         price: isNaN(safePrice) ? 0 : safePrice,
         botType: botType || 'agent',
-        credits: 99999,
+        credits: 20,
         createdAt: Date.now()
     };
     saveBotRegistry();
@@ -2113,6 +2352,71 @@ app.post('/api/bot/register-unlimited', requireAdminKey, (req, res) => {
 });
 
 
+// --- Edit Token (NFT-gated bot code editing) ---
+app.post('/api/bot/edit-token', rateLimit({ windowMs: 60_000, max: 20 }), async (req, res) => {
+    try {
+        const { botId, address, signature, timestamp } = req.body || {};
+        if (!botId || !address || !signature || !timestamp) {
+            return res.status(400).json({ error: 'missing_params', message: 'botId, address, signature, timestamp required' });
+        }
+
+        // 1. Check timestamp freshness (within 5 minutes)
+        const ts = parseInt(timestamp);
+        if (isNaN(ts) || Math.abs(Date.now() - ts) > 5 * 60 * 1000) {
+            return res.status(400).json({ error: 'expired_timestamp', message: 'Timestamp must be within 5 minutes' });
+        }
+
+        // 2. Verify wallet signature
+        const message = `Snake Arena Edit: ${botId} at ${timestamp}`;
+        let recovered;
+        try {
+            recovered = ethers.verifyMessage(message, signature);
+        } catch (e) {
+            return res.status(400).json({ error: 'invalid_signature' });
+        }
+        if (recovered.toLowerCase() !== address.toLowerCase()) {
+            return res.status(403).json({ error: 'signature_mismatch', message: 'Signature does not match address' });
+        }
+
+        // 3. Verify NFT ownership on-chain
+        if (!snakeBotNFTContract) {
+            return res.status(503).json({ error: 'contract_not_ready' });
+        }
+        try {
+            const tokenId = await snakeBotNFTContract.botToTokenId(ethers.encodeBytes32String(botId));
+            if (tokenId === 0n) {
+                return res.status(403).json({ error: 'not_registered', message: 'Bot not registered (no NFT)' });
+            }
+            const nftOwner = await snakeBotNFTContract.ownerOf(tokenId);
+            if (nftOwner.toLowerCase() !== address.toLowerCase()) {
+                return res.status(403).json({ error: 'not_nft_owner', message: 'Address does not own the NFT for this bot' });
+            }
+        } catch (e) {
+            return res.status(403).json({ error: 'nft_check_failed', message: e.message });
+        }
+
+        // 4. Generate edit token (valid 24 hours)
+        const { randomBytes } = require('crypto');
+        const token = randomBytes(32).toString('hex');
+        const expires = Date.now() + 24 * 3600 * 1000;
+        editTokens.set(token, { botId, address: address.toLowerCase(), expires });
+
+        log.important(`[EditToken] Issued for bot ${botId} to ${address}`);
+        res.json({ token, expires, botId, validHours: 24 });
+    } catch (e) {
+        res.status(500).json({ error: 'server_error', message: e.message });
+    }
+});
+
+// Look up numeric matchId by displayMatchId (e.g. "P2" → 5)
+app.get('/api/match/by-display-id', (req, res) => {
+    const { id } = req.query;
+    if (!id) return res.status(400).json({ error: 'missing id' });
+    const matchId = displayIdToMatchId[id.toUpperCase()];
+    if (matchId == null) return res.status(404).json({ error: 'not_found', message: 'No match found for ' + id });
+    res.json({ displayMatchId: id.toUpperCase(), matchId });
+});
+
 // --- Competitive Arena API ---
 app.get('/api/competitive/status', (req, res) => {
     const room = rooms.get('competitive-1');
@@ -2123,8 +2427,9 @@ app.get('/api/competitive/status', (req, res) => {
     const currentMatchId = room.currentMatchId || 0;
     
     res.json({
-        matchNumber: currentMatchId,  // Use currentMatchId as the display number
-        internalMatchNumber: room.matchNumber,  // Internal counter for this room
+        displayMatchId: room.displayMatchId,
+        matchNumber: currentMatchId,
+        internalMatchNumber: room.matchNumber,
         matchId: currentMatchId,
         gameState: room.gameState,
         timeLeft: room.timerSeconds,
@@ -2148,40 +2453,43 @@ app.get('/api/competitive/registered', (req, res) => {
 });
 
 app.post('/api/competitive/enter', (req, res) => {
-    const { botId, matchNumber, txHash } = req.body || {};
-    
-    if (!botId || !matchNumber) {
-        return res.status(400).json({ error: 'missing_params', message: 'botId and matchNumber required' });
+    const { botId, displayMatchId, txHash } = req.body || {};
+
+    if (!botId || !displayMatchId || !txHash) {
+        return res.status(400).json({ error: 'missing_params', message: 'botId, displayMatchId and txHash required' });
     }
-    
+
     const meta = botRegistry[botId];
     if (!meta || meta.botType !== 'agent') {
         return res.status(404).json({ error: 'bot_not_found', message: 'Bot must be a registered agent' });
     }
-    
+
     const room = rooms.get('competitive-1');
     if (!room) return res.status(500).json({ error: 'no_competitive_room' });
-    
-    if (matchNumber < room.matchNumber) {
-        return res.status(400).json({ error: 'invalid_match', message: 'Match number must be >= current match #' + room.matchNumber });
+
+    // Compare numeric part: "A4" vs "A3" → 4 >= 3 ✓
+    const parseNum = (s) => parseInt(String(s).replace(/^[A-Za-z]+/, '')) || 0;
+    if (parseNum(displayMatchId) < parseNum(room.displayMatchId)) {
+        return res.status(400).json({ error: 'invalid_match', message: 'Match must be >= current ' + room.displayMatchId });
     }
-    
-    // Record paid entry
-    if (!room.paidEntries[matchNumber]) {
-        room.paidEntries[matchNumber] = [];
+
+    // Record paid entry keyed by displayMatchId string
+    if (!room.paidEntries[displayMatchId]) {
+        room.paidEntries[displayMatchId] = [];
     }
-    room.paidEntries[matchNumber].push(botId);
-    
-    // Clean up old paid entries (keep only future matches)
-    for (const mn of Object.keys(room.paidEntries)) {
-        if (parseInt(mn) < room.matchNumber) {
-            delete room.paidEntries[mn];
+    room.paidEntries[displayMatchId].push(botId);
+
+    // Clean up past entries
+    const currentNum = parseNum(room.displayMatchId);
+    for (const key of Object.keys(room.paidEntries)) {
+        if (parseNum(key) < currentNum) {
+            delete room.paidEntries[key];
         }
     }
-    
-    log.important('[Competitive] Paid entry registered: ' + meta.name + ' (' + botId + ') for match #' + matchNumber + ' tx:' + (txHash || 'none'));
-    
-    res.json({ ok: true, matchNumber, botId, message: 'Entry confirmed for match #' + matchNumber });
+
+    log.important('[Competitive] Paid entry registered: ' + meta.name + ' (' + botId + ') for ' + displayMatchId + ' tx:' + txHash);
+
+    res.json({ ok: true, displayMatchId, botId, message: 'Entry confirmed for ' + displayMatchId });
 });
 
 app.post("/api/admin/reset-leaderboard", requireAdminKey, (req, res) => {    matchHistory = [];    matchNumber = 0;    fs.writeFileSync(HISTORY_FILE, "[]");    log.important("[Admin] Leaderboard reset");    res.json({ ok: true, message: "Leaderboard reset" });});
@@ -2252,6 +2560,25 @@ app.post('/api/bot/upload', rateLimit({ windowMs: 60_000, max: 10 }), async (req
             return res.status(413).json({ error: 'payload_too_large' });
         }
 
+        // 0. If updating existing bot, verify edit token
+        if (botId) {
+            const token = req.headers['x-edit-token'];
+            if (!token) {
+                return res.status(401).json({ error: 'auth_required', message: 'x-edit-token header required to update existing bot' });
+            }
+            const tokenData = editTokens.get(token);
+            if (!tokenData) {
+                return res.status(403).json({ error: 'invalid_token', message: 'Invalid edit token' });
+            }
+            if (tokenData.botId !== botId) {
+                return res.status(403).json({ error: 'token_bot_mismatch', message: 'Token is for a different bot' });
+            }
+            if (tokenData.expires < Date.now()) {
+                editTokens.delete(token);
+                return res.status(403).json({ error: 'token_expired', message: 'Edit token expired, please re-authenticate' });
+            }
+        }
+
         // 1. Static Scan
         const forbidden = ['require', 'import', 'process', 'fs', 'net', 'http', 'https', 'child_process', 'eval', 'Function', 'constructor', 'global', 'Buffer'];
         // Use a regex to check for word boundaries to avoid false positives on variable names like "processData"
@@ -2284,7 +2611,7 @@ app.post('/api/bot/upload', rateLimit({ windowMs: 60_000, max: 10 }), async (req
             botRegistry[targetBotId] = {
                 id: targetBotId,
                 name: (name || 'Bot-' + targetBotId.substr(-4)).toString().slice(0, 32),
-                credits: 99999,
+                credits: 20,
                 botType: 'agent',
                 createdAt: Date.now(),
                 owner: owner,
@@ -2491,8 +2818,51 @@ app.post('/api/bot/claim', async (req, res) => {
     });
 });
 
-// --- Betting (MVP, in-memory) ---
-const betPools = {}; // matchId -> { total: 0, bets: [] }
+// --- Betting ---
+const betPools = {}; // matchId -> { total: 0, bets: [] } (mirrors on-chain for fast reads)
+const betRecords = {}; // matchId -> [{bettor, botId, amount (USDC units)}] for points calculation
+
+// Get on-chain pool info for a match
+app.get('/api/bet/pool', async (req, res) => {
+    const { matchId } = req.query;
+    if (!matchId) return res.status(400).json({ error: 'missing matchId' });
+    const mid = parseInt(matchId);
+    if (isNaN(mid)) return res.status(400).json({ error: 'invalid matchId' });
+
+    if (!pariMutuelContract) {
+        return res.json({ matchId: mid, totalPool: '0', settled: false, exists: false });
+    }
+    try {
+        const m = await pariMutuelContract.matches(mid);
+        const exists = Number(m.matchId) !== 0;
+        res.json({
+            matchId: mid,
+            totalPool: ethers.formatUnits(m.totalPool, 6), // USDC has 6 decimals
+            totalPoolWei: m.totalPool.toString(),
+            settled: m.settled,
+            cancelled: m.cancelled,
+            exists,
+            startTime: Number(m.startTime),
+            bettingOpen: exists && !m.settled && !m.cancelled && (Date.now() / 1000 < Number(m.startTime) + 300)
+        });
+    } catch (e) {
+        res.json({ matchId: mid, totalPool: '0', settled: false, exists: false, error: e.message });
+    }
+});
+
+// Get user's potential winnings for a match
+app.get('/api/bet/winnings', async (req, res) => {
+    const { matchId, address } = req.query;
+    if (!matchId || !address) return res.status(400).json({ error: 'missing matchId or address' });
+    const mid = parseInt(matchId);
+    if (!pariMutuelContract) return res.json({ winnings: '0' });
+    try {
+        const w = await pariMutuelContract.getUserPotentialWinnings(mid, address);
+        res.json({ winnings: ethers.formatUnits(w, 6), winningsWei: w.toString() }); // USDC 6 decimals
+    } catch (e) {
+        res.json({ winnings: '0', error: e.message });
+    }
+});
 
 app.post('/api/bet/place', (req, res) => {
     // bettor is the wallet address, txHash is the transaction hash on Base Sepolia
@@ -2513,8 +2883,8 @@ app.post('/api/bet/place', (req, res) => {
     }
 
     // Record the bet
-    betPools[matchId].bets.push({ 
-        botId, 
+    betPools[matchId].bets.push({
+        botId,
         amount: betAmount,
         bettor: bettor || 'anonymous',
         txHash: txHash || null,
@@ -2523,7 +2893,17 @@ app.post('/api/bet/place', (req, res) => {
 
     betPools[matchId].total += betAmount;
 
-    console.log(`[Bet] New bet on match #${matchId}: ${betAmount} ETH on ${botId} by ${bettor} (Tx: ${txHash})`);
+    // Also record in betRecords for points system (amount stored in raw units from chain)
+    if (!betRecords[matchId]) betRecords[matchId] = [];
+    betRecords[matchId].push({
+        bettor: bettor || 'anonymous',
+        botId,
+        amount: betAmount, // raw USDC units (6 decimals) as passed from frontend
+        txHash: txHash || null,
+        timestamp: Date.now()
+    });
+
+    console.log(`[Bet] New bet on match #${matchId}: ${betAmount} USDC units on ${botId} by ${bettor} (Tx: ${txHash})`);
 
     res.json({ 
         ok: true, 
@@ -2541,6 +2921,36 @@ app.get('/api/bet/status', (req, res) => {
 
 app.post('/api/bet/claim', (req, res) => {
     res.json({ ok: true });
+});
+
+// --- Points API ---
+app.get('/api/points/my', (req, res) => {
+    const { address } = req.query;
+    if (!address) return res.status(400).json({ error: 'missing address' });
+    const addr = address.toLowerCase();
+    const data = pointsData[addr] || { points: 0, history: [] };
+    // Include rank
+    const sorted = Object.entries(pointsData)
+        .sort(([, a], [, b]) => b.points - a.points);
+    const rank = sorted.findIndex(([a]) => a === addr) + 1;
+    res.json({
+        address: addr,
+        points: data.points,
+        rank: rank > 0 ? rank : null,
+        history: (data.history || []).slice(-20).reverse() // last 20, newest first
+    });
+});
+
+app.get('/api/points/leaderboard', (req, res) => {
+    const sorted = Object.entries(pointsData)
+        .sort(([, a], [, b]) => b.points - a.points)
+        .slice(0, 20)
+        .map(([address, data], idx) => ({
+            rank: idx + 1,
+            address,
+            points: data.points
+        }));
+    res.json(sorted);
 });
 
 // Replay APIs

@@ -1,5 +1,5 @@
 {
-  "_format": "hh3-artifact-1",
+  "_format": "hh-sol-artifact-1",
   "contractName": "ISnakeBotNFT",
   "sourceName": "contracts/BotRegistry.sol",
   "abi": [
@@ -59,8 +59,5 @@
   "bytecode": "0x",
   "deployedBytecode": "0x",
   "linkReferences": {},
-  "deployedLinkReferences": {},
-  "immutableReferences": {},
-  "inputSourceName": "project/contracts/BotRegistry.sol",
-  "buildInfoId": "solc-0_8_19-80987926feb82dc42fffd62eefe286d0ae2b467e"
+  "deployedLinkReferences": {}
 }
