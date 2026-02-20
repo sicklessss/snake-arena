@@ -257,6 +257,7 @@ function Prediction({ matchId, displayMatchId, arenaType }: { matchId: number | 
   const { isConnected, address } = useAccount();
   const [botName, setBotName] = useState('');
   const [targetMatch, setTargetMatch] = useState('');
+  const [amount, setAmount] = useState('');
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -266,22 +267,28 @@ function Prediction({ matchId, displayMatchId, arenaType }: { matchId: number | 
 
   const handlePredict = async () => {
     const mid = parseInt(targetMatch);
-    if (isNaN(mid)) return alert('Enter a valid Match #');
-    if (!botName) return alert('Enter Bot Name');
-    if (!isConnected) return alert('Connect Wallet');
+    if (isNaN(mid)) return alert('请输入有效的比赛编号');
+    if (!botName) return alert('请输入机器人名称');
+    if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) return alert('请输入下注金额');
+    if (!isConnected) return alert('请先连接钱包');
 
     setBusy(true);
     try {
-      setStatus('Submitting prediction...');
-      const res = await fetch('/api/prediction/place', {
+      setStatus('提交预测中...');
+      const res = await fetch('/api/bet/place', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ matchId: mid, botId: botName, amount: '0', bettor: address, arenaType })
+        body: JSON.stringify({ matchId: mid, botId: botName, amount, bettor: address, arenaType })
       });
       const data = await res.json();
-      setStatus(data.ok ? '✅ Prediction recorded! Points awarded if correct.' : '⚠️ ' + (data.error || 'Error'));
+      if (data.ok) {
+        setStatus(`✅ 预测成功！下注 ${amount} 积分在 ${botName}。剩余: ${data.remainingPoints} 积分`);
+        setAmount('');
+      } else {
+        setStatus('⚠️ ' + (data.error || 'Error'));
+      }
     } catch (e: any) {
-      setStatus('Error: ' + (e.message || 'Network error'));
+      setStatus('错误: ' + (e.message || '网络错误'));
     } finally {
       setBusy(false);
     }
@@ -289,14 +296,14 @@ function Prediction({ matchId, displayMatchId, arenaType }: { matchId: number | 
 
   return (
     <div className="panel-card">
-      <div className="panel-row"><span>Current Match</span><span>{displayMatchId || (matchId !== null ? `#${matchId}` : '--')}</span></div>
-      <input placeholder="Match # (global ID)" value={targetMatch} onChange={e => setTargetMatch(e.target.value)} type="number" />
-      <input placeholder="Bot Name (who will win?)" value={botName} onChange={e => setBotName(e.target.value)} style={{ marginTop: '6px' }} />
+      <div className="panel-row"><span>当前比赛</span><span>{displayMatchId || (matchId !== null ? `#${matchId}` : '--')}</span></div>
+      <input placeholder="比赛编号 (全局ID)" value={targetMatch} onChange={e => setTargetMatch(e.target.value)} type="number" />
+      <input placeholder="机器人名称 (预测谁赢?)" value={botName} onChange={e => setBotName(e.target.value)} style={{ marginTop: '6px' }} />
+      <input placeholder="下注金额 (积分)" value={amount} onChange={e => setAmount(e.target.value)} type="number" min="1" style={{ marginTop: '6px' }} />
       <button onClick={handlePredict} disabled={busy} style={{ marginTop: '6px' }}>
-        {busy ? '⏳ Submitting...' : '🔮 Predict Winner'}
+        {busy ? '⏳ 提交中...' : '🔮 下注预测'}
       </button>
       <div className="muted" style={{ marginTop: '6px' }}>{status}</div>
-      <div className="muted" style={{ marginTop: '4px', fontSize: '0.7rem' }}>Predict correctly to earn points. On-chain USDC betting coming soon.</div>
     </div>
   );
 }

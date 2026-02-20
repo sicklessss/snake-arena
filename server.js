@@ -1,3 +1,5 @@
+require('dotenv').config();
+
 const WebSocket = require('ws');
 const express = require('express');
 const http = require('http');
@@ -5,6 +7,151 @@ const path = require('path');
 const fs = require('fs');
 const bodyParser = require('body-parser');
 const { Worker } = require('worker_threads');
+
+// --- Blockchain Config ---
+const { ethers } = require('ethers');
+
+// Contract addresses (updated 2026-02-19 - v5.1 Fixed PariMutuel)
+const CONTRACTS = {
+    botRegistry: process.env.BOT_REGISTRY_CONTRACT || '0x25DEA1962A7A3a5fC4E1956E05b5eADE609E0800',
+    rewardDistributor: process.env.REWARD_DISTRIBUTOR_CONTRACT || '0xB354e3062b493466da0c1898Ede5aabF56279046',
+    pariMutuel: process.env.PARIMUTUEL_CONTRACT || '0x1fDDd7CC864F85B20F1EF27221B5DD6C5Ffe413d',
+    snakeBotNFT: process.env.NFT_CONTRACT || '0xF269b84543041EA350921E3e3A2Da0B14B85453C',
+    referralRewards: process.env.REFERRAL_CONTRACT || '0xfAA055B73D0CbE3E114152aE38f5E76a09F6524F'
+};
+
+// Backend wallet for creating bots on-chain
+const provider = new ethers.JsonRpcProvider('https://sepolia.base.org');
+const backendWallet = process.env.BACKEND_PRIVATE_KEY 
+    ? new ethers.Wallet(process.env.BACKEND_PRIVATE_KEY, provider)
+    : null;
+
+// Contract ABIs (simplified)
+const BOT_REGISTRY_ABI = [
+    "function createBot(bytes32 _botId, string calldata _botName, address _creator) external",
+    "function registerBot(bytes32 _botId, address _inviter) external payable",
+    "function bots(bytes32) external view returns (bytes32 botId, string memory botName, address owner, bool registered, uint256 registeredAt, uint256 matchesPlayed, uint256 totalEarnings, uint256 salePrice)",
+    "function getBotById(bytes32 _botId) external view returns (tuple(bytes32 botId, string botName, address owner, bool registered, uint256 registeredAt, uint256 matchesPlayed, uint256 totalEarnings, uint256 salePrice))",
+    "function getOwnerBots(address _owner) external view returns (bytes32[] memory)",
+    "function getBotsForSale(uint256 _offset, uint256 _limit) external view returns (tuple(bytes32 botId, string botName, address owner, bool registered, uint256 registeredAt, uint256 matchesPlayed, uint256 totalEarnings, uint256 salePrice)[] memory)",
+    "function registrationFee() external view returns (uint256)",
+    "event BotCreated(bytes32 indexed botId, string botName, address indexed creator)",
+    "event BotRegistered(bytes32 indexed botId, address indexed owner, uint256 fee)"
+];
+
+const REWARD_DISTRIBUTOR_ABI = [
+    "function pendingRewards(bytes32) external view returns (uint256)",
+    "function claimRewards(bytes32 _botId) external",
+    "function claimRewardsBatch(bytes32[] calldata _botIds) external",
+    "function MIN_CLAIM_THRESHOLD() external view returns (uint256)"
+];
+
+const SNAKE_BOT_NFT_ABI = [
+    "function mintBotNFT(address _to, bytes32 _botId, string calldata _botName) external returns (uint256)",
+    "function tokenURI(uint256 tokenId) external view returns (string memory)",
+    "function ownerOf(uint256 tokenId) external view returns (address)",
+    "function balanceOf(address owner) external view returns (uint256)",
+    "function botToTokenId(bytes32) external view returns (uint256)",
+    "function tokenIdToBot(uint256) external view returns (bytes32)",
+    "function getBotsByOwner(address _owner) external view returns (bytes32[] memory)",
+    "function safeTransferFrom(address from, address to, uint256 tokenId) external",
+    "function tokenOfOwnerByIndex(address owner, uint256 index) external view returns (uint256)"
+];
+
+// Edit token store: token -> { botId, address, expires }
+const editTokens = new Map();
+// Clean up expired tokens every hour
+setInterval(() => {
+    const now = Date.now();
+    for (const [token, data] of editTokens.entries()) {
+        if (data.expires < now) editTokens.delete(token);
+    }
+}, 3600_000);
+
+const REFERRAL_REWARDS_ABI = [
+    "function claim(uint256 amount, uint256 nonce, bytes calldata signature) external",
+    "function getClaimed(address user) external view returns (uint256)",
+    "function getNonce(address user) external view returns (uint256)",
+    "function nonces(address) external view returns (uint256)",
+    "function claimed(address) external view returns (uint256)",
+    "event Claimed(address indexed user, uint256 amount, uint256 nonce, uint256 newTotalClaimed)"
+];
+
+const PARI_MUTUEL_ABI = [
+    "function createMatch(uint256 _matchId, uint256 _startTime) external",
+    "function settleMatch(uint256 _matchId, bytes32[] calldata _winners) external",
+    "function cancelMatch(uint256 _matchId, string calldata _reason) external",
+    "function placeBet(uint256 _matchId, bytes32 _botId, uint256 _amount) external",
+    "function claimWinnings(uint256 _matchId) external",
+    "function claimRefund(uint256 _matchId) external",
+    "function authorizeOracle(address _oracle) external",
+    "function matches(uint256) external view returns (uint256 matchId, uint256 startTime, uint256 endTime, uint256 totalPool, bool settled, bool cancelled)",
+    "function getUserPotentialWinnings(uint256 _matchId, address _bettor) external view returns (uint256)",
+    "function getMatchBets(uint256 _matchId) external view returns (tuple(address bettor, bytes32 botId, uint256 amount, bool claimed)[])",
+    "function botTotalBets(uint256, bytes32) external view returns (uint256)",
+    "function getCurrentOdds(uint256 _matchId, bytes32 _botId) external view returns (uint256)",
+    "event BetPlaced(uint256 indexed matchId, address indexed bettor, bytes32 indexed botId, uint256 amount, uint256 betIndex)",
+    "event MatchSettled(uint256 indexed matchId, bytes32[] winners, uint256 totalPool, uint256 platformRake, uint256 botRewards)"
+];
+
+// Initialize contracts
+let botRegistryContract = null;
+let rewardDistributorContract = null;
+let snakeBotNFTContract = null;
+let referralRewardsContract = null;
+let pariMutuelContract = null;
+
+function initContracts() {
+    if (backendWallet && CONTRACTS.botRegistry !== '0x0000000000000000000000000000000000000000') {
+        botRegistryContract = new ethers.Contract(CONTRACTS.botRegistry, BOT_REGISTRY_ABI, backendWallet);
+        rewardDistributorContract = new ethers.Contract(CONTRACTS.rewardDistributor, REWARD_DISTRIBUTOR_ABI, provider);
+        snakeBotNFTContract = new ethers.Contract(CONTRACTS.snakeBotNFT, SNAKE_BOT_NFT_ABI, backendWallet);
+        referralRewardsContract = new ethers.Contract(CONTRACTS.referralRewards, REFERRAL_REWARDS_ABI, provider);
+        pariMutuelContract = new ethers.Contract(CONTRACTS.pariMutuel, PARI_MUTUEL_ABI, backendWallet);
+        log.important(`[Blockchain] Contracts initialized. Registry: ${CONTRACTS.botRegistry}, NFT: ${CONTRACTS.snakeBotNFT}, PariMutuel: ${CONTRACTS.pariMutuel}`);
+
+        // Poll for BotRegistered events every 30s (reliable on public RPC, no filter expiry issues)
+        let lastCheckedBlock = null;
+        async function pollBotRegisteredEvents() {
+            try {
+                const currentBlock = await provider.getBlockNumber();
+                if (lastCheckedBlock === null) {
+                    lastCheckedBlock = currentBlock; // start from now
+                    return;
+                }
+                if (currentBlock <= lastCheckedBlock) return;
+                const fromBlock = lastCheckedBlock + 1;
+                const toBlock = currentBlock;
+                const events = await botRegistryContract.queryFilter('BotRegistered', fromBlock, toBlock);
+                for (const evt of events) {
+                    try {
+                        const [botIdBytes32, ownerAddr] = evt.args;
+                        const botId = ethers.decodeBytes32String(botIdBytes32).replace(/\0/g, '');
+                        const bot = botRegistry[botId];
+                        if (bot) {
+                            bot.unlimited = true;
+                            bot.credits = 999999;
+                            saveBotRegistry();
+                            log.important(`[Blockchain] BotRegistered: ${bot.name} (${botId}) → unlimited plays granted. Owner: ${ownerAddr}`);
+                        } else {
+                            log.warn(`[Blockchain] BotRegistered event for unknown local botId: ${botId}`);
+                        }
+                    } catch (e) {
+                        log.error('[Blockchain] BotRegistered event parse error:', e.message);
+                    }
+                }
+                lastCheckedBlock = toBlock;
+            } catch (e) {
+                log.warn('[Blockchain] pollBotRegisteredEvents error:', e.message);
+            }
+        }
+        setInterval(pollBotRegisteredEvents, 30_000);
+        pollBotRegisteredEvents(); // initial run
+        log.important('[Blockchain] Polling for BotRegistered events every 30s...');
+    } else {
+        log.warn('[Blockchain] Contracts not initialized - set env vars or deploy contracts');
+    }
+}
 
 // --- Logging Config ---
 const LOG_LEVEL = process.env.LOG_LEVEL || 'info'; // 'debug' | 'info' | 'warn' | 'error'
@@ -22,6 +169,141 @@ const BOTS_DIR = path.join(__dirname, 'bots');
 if (!fs.existsSync(BOTS_DIR)) fs.mkdirSync(BOTS_DIR, { recursive: true });
 const MAX_WORKERS = 300;
 const activeWorkers = new Map(); // botId -> Worker instance
+
+// --- Referral System Config ---
+const REFERRAL_DATA_FILE = path.join(__dirname, 'data', 'referrals.json');
+const REFERRAL_POINTS_L1 = 100; // 100 points per direct referral
+const REFERRAL_POINTS_L2 = 50;  // 50 points per L2 referral
+
+// Load referral data
+let referralData = { users: {}, rewards: {} };
+function loadReferralData() {
+    try {
+        if (fs.existsSync(REFERRAL_DATA_FILE)) {
+            referralData = JSON.parse(fs.readFileSync(REFERRAL_DATA_FILE, 'utf8'));
+            log.info(`[Referral] Loaded ${Object.keys(referralData.users).length} referral records`);
+        }
+    } catch (e) {
+        log.error('[Referral] Failed to load data:', e.message);
+    }
+}
+function saveReferralData() {
+    try {
+        const dataDir = path.dirname(REFERRAL_DATA_FILE);
+        if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+        fs.writeFileSync(REFERRAL_DATA_FILE, JSON.stringify(referralData, null, 2));
+    } catch (e) {
+        log.error('[Referral] Failed to save data:', e.message);
+    }
+}
+loadReferralData();
+
+// --- Points System ---
+const POINTS_DATA_FILE = path.join(__dirname, 'data', 'points.json');
+let pointsData = {}; // { walletAddress: { points: 0, history: [] } }
+function loadPoints() {
+    try {
+        if (fs.existsSync(POINTS_DATA_FILE)) {
+            pointsData = JSON.parse(fs.readFileSync(POINTS_DATA_FILE, 'utf8'));
+            log.info(`[Points] Loaded ${Object.keys(pointsData).length} point records`);
+        }
+    } catch (e) {
+        log.error('[Points] Failed to load data:', e.message);
+    }
+}
+function savePoints() {
+    try {
+        const dataDir = path.dirname(POINTS_DATA_FILE);
+        if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+        fs.writeFileSync(POINTS_DATA_FILE, JSON.stringify(pointsData, null, 2));
+    } catch (e) {
+        log.error('[Points] Failed to save data:', e.message);
+    }
+}
+loadPoints();
+
+// Record referral registration
+function recordReferral(user, inviter, txHash, amount) {
+    if (!user || !inviter || user.toLowerCase() === inviter.toLowerCase()) return false;
+
+    const userLower = user.toLowerCase();
+    const inviterLower = inviter.toLowerCase();
+
+    // Check if user already has inviter
+    if (referralData.users[userLower]) return false;
+
+    // Record L1 referral relationship
+    referralData.users[userLower] = {
+        inviter: inviterLower,
+        registeredAt: Date.now(),
+        txHash: txHash
+    };
+
+    // Award L1 referral points to inviter
+    if (!pointsData[inviterLower]) pointsData[inviterLower] = { points: 0, history: [] };
+    pointsData[inviterLower].points += REFERRAL_POINTS_L1;
+    pointsData[inviterLower].history.push({
+        type: 'referral_l1',
+        from: userLower,
+        points: REFERRAL_POINTS_L1,
+        timestamp: Date.now(),
+        txHash: txHash
+    });
+
+    // L2 referral (inviter's inviter) — award points
+    const l2Inviter = referralData.users[inviterLower]?.inviter;
+    if (l2Inviter) {
+        if (!pointsData[l2Inviter]) pointsData[l2Inviter] = { points: 0, history: [] };
+        pointsData[l2Inviter].points += REFERRAL_POINTS_L2;
+        pointsData[l2Inviter].history.push({
+            type: 'referral_l2',
+            from: userLower,
+            via: inviterLower,
+            points: REFERRAL_POINTS_L2,
+            timestamp: Date.now(),
+            txHash: txHash
+        });
+    }
+
+    saveReferralData();
+    savePoints();
+    log.important(`[Referral] ${userLower} invited by ${inviterLower}, awarded ${REFERRAL_POINTS_L1} points (L1)`);
+    return true;
+}
+
+// Get referral stats for a user
+function getReferralStats(address) {
+    const addrLower = address.toLowerCase();
+    const user = referralData.users[addrLower];
+    const userPoints = pointsData[addrLower] || { points: 0, history: [] };
+
+    // Count invitees
+    const invitees = Object.entries(referralData.users)
+        .filter(([_, data]) => data.inviter === addrLower)
+        .map(([addr, data]) => ({ address: addr, registeredAt: data.registeredAt }));
+
+    // Sum referral points from history
+    const referralPointsL1 = userPoints.history
+        .filter(h => h.type === 'referral_l1')
+        .reduce((sum, h) => sum + (h.points || 0), 0);
+    const referralPointsL2 = userPoints.history
+        .filter(h => h.type === 'referral_l2')
+        .reduce((sum, h) => sum + (h.points || 0), 0);
+
+    return {
+        hasInviter: !!user,
+        inviter: user?.inviter || null,
+        registeredAt: user?.registeredAt || null,
+        invitees: invitees,
+        inviteeCount: invitees.length,
+        rewards: {
+            l1Points: referralPointsL1,
+            l2Points: referralPointsL2,
+            totalPoints: referralPointsL1 + referralPointsL2
+        },
+        history: userPoints.history.filter(h => h.type === 'referral_l1' || h.type === 'referral_l2')
+    };
+}
 
 // High-contrast color palette (16 distinct colors)
 const SNAKE_COLORS = [
@@ -129,6 +411,87 @@ function nextMatchId() {
     return id;
 }
 
+// Per-type display counters (reset daily at UTC midnight)
+let perfMatchCounter = 1;
+let compMatchCounter = 1;
+let lastResetDate = new Date().toISOString().slice(0, 10);
+
+// Epoch counter — days since 2026-02-20 (launch date), starting at 1
+const EPOCH_ORIGIN = new Date('2026-02-20T00:00:00Z');
+function getCurrentEpoch() {
+    const now = new Date();
+    const diffMs = now.getTime() - EPOCH_ORIGIN.getTime();
+    return Math.max(1, Math.floor(diffMs / (24 * 60 * 60 * 1000)) + 1);
+}
+
+// Map displayMatchId → numeric matchId (for pool lookup)
+const displayIdToMatchId = {};
+
+function getNextDisplayId(type) {
+    const displayId = type === 'competitive' ? ('A' + compMatchCounter++) : ('P' + perfMatchCounter++);
+    return displayId;
+}
+
+function registerDisplayId(displayId, matchId) {
+    displayIdToMatchId[displayId] = matchId;
+    // Keep only last 200 entries
+    const keys = Object.keys(displayIdToMatchId);
+    if (keys.length > 200) delete displayIdToMatchId[keys[0]];
+}
+
+// --- Sequential blockchain TX queue (prevents nonce collisions) ---
+// fn receives txOverrides = { nonce } so each call uses the correct pending nonce
+const _txQueue = [];
+let _txRunning = false;
+function enqueueTx(label, fn) {
+    _txQueue.push({ label, fn });
+    if (!_txRunning) _drainTxQueue();
+}
+async function _drainTxQueue() {
+    _txRunning = true;
+    try {
+        while (_txQueue.length > 0) {
+            const { label, fn } = _txQueue.shift();
+            try {
+                // Use 'pending' nonce so we don't collide with stuck mempool txs
+                // Also use 3x gas to ensure fast inclusion and avoid replacement-fee issues
+                let overrides = {};
+                if (backendWallet) {
+                    const pendingNonce = await backendWallet.provider.getTransactionCount(backendWallet.address, 'pending');
+                    const feeData = await backendWallet.provider.getFeeData();
+                    overrides = {
+                        nonce: pendingNonce,
+                        maxFeePerGas: (feeData.maxFeePerGas || ethers.parseUnits('10', 'gwei')) * 3n,
+                        maxPriorityFeePerGas: (feeData.maxPriorityFeePerGas || ethers.parseUnits('2', 'gwei')) * 3n,
+                    };
+                }
+                await fn(overrides);
+            } catch (e) {
+                log.warn('[TxQueue] ' + label + ' failed: ' + e.message);
+            }
+        }
+    } finally {
+        // Always reset _txRunning so future enqueued items can start the drain
+        _txRunning = false;
+    }
+}
+
+function checkDailyReset() {
+    const today = new Date().toISOString().slice(0, 10);
+    if (today !== lastResetDate) {
+        lastResetDate = today;
+        perfMatchCounter = 1;
+        compMatchCounter = 1;
+        for (const [, room] of rooms) {
+            if (room.type === 'competitive') {
+                room.paidEntries = {};
+            }
+        }
+        log.important('[DailyReset] Match counters reset for: ' + today);
+    }
+}
+setInterval(checkDailyReset, 60_000);
+
 function saveHistory(arenaId, winnerName, score) {
     matchHistory.unshift({
         matchId: nextMatchId(),
@@ -161,7 +524,7 @@ const SPAWN_POINTS = [
 ];
 
 const ROOM_LIMITS = {
-    performance: 6,
+    performance: 10,
     competitive: 2,
 };
 const ROOM_MAX_PLAYERS = {
@@ -229,22 +592,27 @@ function startBotWorker(botId, overrideArenaId) {
         workerData: {
             scriptPath: bot.scriptPath,
             botId: botId,
-            serverUrl: `ws://localhost:${PORT}?arenaId=${arenaId}` // Local loopback for bots
+            serverUrl: `ws://127.0.0.1:${PORT}?arenaId=${arenaId}` // Use explicit IPv4 loopback
         }
     });
 
     worker.on('message', (msg) => {
         if (msg.type === 'log') console.log(`[Bot ${botId}]`, msg.message);
-        if (msg.type === 'error') console.error(`[Bot ${botId}]`, msg.message);
+        if (msg.type === 'error') log.error(`[Bot ${botId}] Error: ${msg.message}`);
+        if (msg.type === 'status') log.important(`[Worker] Bot ${botId} status: ${msg.status}`);
     });
 
     worker.on('error', (err) => {
-        console.error(`[Worker] Bot ${botId} error:`, err);
+        log.error(`[Worker] Bot ${botId} thread error:`, err);
         stopBotWorker(botId);
     });
 
     worker.on('exit', (code) => {
-        if (code !== 0) console.error(`[Worker] Bot ${botId} stopped with exit code ${code}`);
+        if (code !== 0) {
+            log.error(`[Worker] Bot ${botId} CRASHED with exit code ${code}`);
+        } else {
+            log.important(`[Worker] Bot ${botId} stopped cleanly`);
+        }
         activeWorkers.delete(botId);
         checkWorkerLoad();
     });
@@ -302,6 +670,7 @@ function saveBotRegistry() {
 loadBotRegistry();
 
 function isOpposite(dir1, dir2) {
+    if (!dir1 || !dir2 || typeof dir1.x !== 'number' || typeof dir2.x !== 'number') return false;
     return dir1.x === -dir2.x && dir1.y === -dir2.y;
 }
 
@@ -331,8 +700,10 @@ class GameRoom {
         this.spawnIndex = 0;
         this.gameState = 'COUNTDOWN';
         this.winner = null;
-        this.timerSeconds = 15;
+        this.timerSeconds = 5;
         this.currentMatchId = nextMatchId();
+        this.displayMatchId = getNextDisplayId(type);
+        registerDisplayId(this.displayMatchId, this.currentMatchId);
         this.victoryPauseTimer = 0;
         this.lastSurvivorForVictory = null;
         this.replayFrames = []; // Record frames for replay
@@ -860,6 +1231,8 @@ class GameRoom {
         p.deathTimer = DEATH_BLINK_TURNS;
         p.deathTime = Date.now();
         p.deathType = deathType;
+        
+        log.info(`[Death] Player "${p.name}" (${p.id}) died: ${deathType} in room ${this.id}`);
 
         if (deathType === 'eaten') {
             p.body = [p.body[0]];
@@ -887,17 +1260,74 @@ class GameRoom {
         this.winner = survivor ? survivor.name : 'No Winner';
         this.timerSeconds = 5;
         saveHistory(this.id, this.winner, survivor ? survivor.score : 0);
-        
+
         // Save replay
         this.saveReplay(survivor);
-        
+
+        // Determine top 3 placements for betting settlement
+        // 1st = survivor, 2nd/3rd = last to die (by deathTime descending)
+        const allPlayers = Object.values(this.players);
+        const dead = allPlayers
+            .filter(p => !p.alive && p.deathTime && p.botId)
+            .sort((a, b) => b.deathTime - a.deathTime); // most recently dead first
+
+        const placements = [];
+        if (survivor && survivor.botId) placements.push(survivor.botId);
+        for (const p of dead) {
+            if (placements.length >= 3) break;
+            if (p.botId && !placements.includes(p.botId)) placements.push(p.botId);
+        }
+
         this.sendEvent('match_end', {
             matchId: this.currentMatchId,
             winnerBotId: survivor ? survivor.botId || null : null,
             winnerName: this.winner,
             arenaId: this.id,
             arenaType: this.type,
+            placements, // [1st botId, 2nd botId, 3rd botId]
         });
+
+        // Settle match on-chain for betting payouts
+        if (pariMutuelContract && (this.type === 'performance' || this.type === 'competitive') && placements.length > 0) {
+            const matchId = this.currentMatchId;
+            const arenaType = this.type;
+            const winnersBytes32 = placements.map(id => {
+                try { return ethers.encodeBytes32String(id.slice(0, 31)); }
+                catch { return ethers.ZeroHash; }
+            }).filter(h => h !== ethers.ZeroHash);
+
+            if (winnersBytes32.length > 0) {
+                enqueueTx(`settleMatch #${matchId}`, async (overrides) => {
+                    const tx = await pariMutuelContract.settleMatch(matchId, winnersBytes32, overrides);
+                    await tx.wait(1, 120000);
+                    log.important(`[Betting] Match #${matchId} (${arenaType}) settled on-chain. Placements: ${placements.join(', ')}`);
+                    // Award points for competitive arena bets that picked the winner
+                    if (arenaType === 'competitive' && placements.length > 0) {
+                        const winnerBotId = placements[0];
+                        const bets = betRecords[matchId] || [];
+                        let pointsAwarded = 0;
+                        for (const bet of bets) {
+                            if (bet.botId === winnerBotId && bet.bettor && bet.bettor !== 'anonymous') {
+                                const addr = bet.bettor.toLowerCase();
+                                const usdcAmount = Math.floor(Number(bet.amount) / 1e6);
+                                if (usdcAmount > 0) {
+                                    if (!pointsData[addr]) pointsData[addr] = { points: 0, history: [] };
+                                    pointsData[addr].points += usdcAmount;
+                                    pointsData[addr].history.push({
+                                        matchId, amount: usdcAmount, type: 'bet_win', ts: Date.now()
+                                    });
+                                    pointsAwarded += usdcAmount;
+                                }
+                            }
+                        }
+                        if (pointsAwarded > 0) {
+                            savePoints();
+                            log.important(`[Points] Awarded ${pointsAwarded} points for match #${matchId}`);
+                        }
+                    }
+                });
+            }
+        }
     }
 
     saveReplay(survivor) {
@@ -980,6 +1410,8 @@ class GameRoom {
 
         this.players = {};
         this.currentMatchId = nextMatchId();
+        this.displayMatchId = getNextDisplayId(this.type);
+        registerDisplayId(this.displayMatchId, this.currentMatchId);
         this.victoryPauseTimer = 0;
         this.lastSurvivorForVictory = null;
         this.matchTimeLeft = MATCH_DURATION;
@@ -1008,25 +1440,61 @@ class GameRoom {
 
     startGame() {
         this.spawnIndex = 0;
+        log.important(`[Room ${this.id}] Starting match with ${Object.keys(this.waitingRoom).length} players`);
+        
+        const usedSpawnIndices = new Set();
+        
         Object.keys(this.waitingRoom).forEach((id) => {
             const w = this.waitingRoom[id];
-            const spawn = this.getSpawnPosition();
+            
+            // Get available spawn points (not close to existing players AND not used in this startGame batch)
+            const occupied = new Set();
+            Object.values(this.players).forEach(p => {
+                if (p.body && p.body[0]) {
+                    SPAWN_POINTS.forEach((sp, idx) => {
+                        const dist = Math.abs(sp.x - p.body[0].x) + Math.abs(sp.y - p.body[0].y);
+                        if (dist < 5) occupied.add(idx);
+                    });
+                }
+            });
+            
+            let spawnIdx = -1;
+            const available = SPAWN_POINTS.map((_, i) => i).filter(i => !occupied.has(i) && !usedSpawnIndices.has(i));
+            
+            if (available.length > 0) {
+                spawnIdx = available[Math.floor(Math.random() * available.length)];
+            } else {
+                // Fallback to any not used in this batch
+                const notUsedInBatch = SPAWN_POINTS.map((_, i) => i).filter(i => !usedSpawnIndices.has(i));
+                spawnIdx = notUsedInBatch.length > 0 ? notUsedInBatch[0] : Math.floor(Math.random() * SPAWN_POINTS.length);
+            }
+            
+            usedSpawnIndices.add(spawnIdx);
+            const spawn = SPAWN_POINTS[spawnIdx];
+            const body = [
+                { x: spawn.x, y: spawn.y },
+                { x: spawn.x - spawn.dir.x, y: spawn.y - spawn.dir.y },
+                { x: spawn.x - spawn.dir.x * 2, y: spawn.y - spawn.dir.y * 2 },
+            ];
+
+            log.info(`[Spawn] Player "${w.name}" (${id}) at (${spawn.x}, ${spawn.y})`);
+            
             this.players[id] = {
                 id: id,
                 name: w.name,
                 color: w.color,
-                body: spawn.body,
-                direction: spawn.direction,
-                nextDirection: spawn.direction,
+                body: body,
+                direction: spawn.dir,
+                nextDirection: spawn.dir,
                 alive: true,
                 score: 0,
                 ws: w.ws,
                 botType: w.botType,
-                botId: w.botId || null,
+                botId: w.botId || id,
                 entryPrice: w.entryPrice || 0,
             };
             if (w.ws && w.ws.readyState === 1) {
-                w.ws.send(JSON.stringify({ type: 'init', id: id, botId: w.botId || null, gridSize: CONFIG.gridSize }));
+                w.ws.send(JSON.stringify({ type: 'init', id: id, botId: w.botId || id, gridSize: CONFIG.gridSize }));
             }
         });
 
@@ -1036,6 +1504,17 @@ class GameRoom {
         this.timerSeconds = 0;
         this.matchTimeLeft = MATCH_DURATION;
         this.sendEvent('match_start', { matchId: this.currentMatchId, arenaId: this.id, arenaType: this.type });
+
+        // Create match on-chain for betting (queued to avoid nonce collisions)
+        if (pariMutuelContract && (this.type === 'performance' || this.type === 'competitive')) {
+            const matchId = this.currentMatchId;
+            const startTime = Math.floor(Date.now() / 1000) + 30; // +30s buffer so block.timestamp check passes
+            enqueueTx(`createMatch #${matchId}`, async (overrides) => {
+                const tx = await pariMutuelContract.createMatch(matchId, startTime, overrides);
+                await tx.wait(1, 120000);
+                log.important(`[Betting] Match #${matchId} (${this.type}) created on-chain`);
+            });
+        }
     }
 
     broadcastState() {
@@ -1044,6 +1523,7 @@ class GameRoom {
             name: p.name,
             color: p.color,
             body: p.body,
+            head: p.body && p.body.length > 0 ? p.body[0] : null,
             direction: p.direction,
             score: p.score,
             alive: p.alive,
@@ -1052,19 +1532,20 @@ class GameRoom {
             deathType: p.deathType,
             length: p.body.length,
             botType: p.botType,
-            botId: p.botId || null,
+            botId: p.botId || p.id,
         }));
 
         const waitingPlayers = Object.values(this.waitingRoom).map((w) => ({
             id: w.id,
             name: w.name,
             color: w.color,
-            body: [],
+            body: null,
+            head: null,
             score: 0,
             alive: true,
             waiting: true,
             botType: w.botType,
-            botId: w.botId || null,
+            botId: w.botId || w.id,
         }));
 
         const state = {
@@ -1082,6 +1563,8 @@ class GameRoom {
             food: this.food,
             obstacles: this.type === 'competitive' ? this.obstacles : [],
             matchNumber: this.matchNumber || 1,
+            displayMatchId: this.displayMatchId,
+            epoch: getCurrentEpoch(),
             victoryPause: this.victoryPauseTimer > 0,
             victoryPauseTime: Math.ceil(this.victoryPauseTimer / 8),
         };
@@ -1149,7 +1632,7 @@ class GameRoom {
         }
 
         if (this.type === 'performance' && botType === 'agent' && botMeta) {
-            if (botMeta.credits <= 0) return { ok: false, reason: 'topup_required' };
+            if (botMeta.credits <= 0) return { ok: false, reason: 'trial_exhausted', message: 'Trial plays used up. Register your bot (mint NFT) for unlimited plays.' };
             botMeta.credits -= 1;
             saveBotRegistry();
             if (ws && ws.readyState === 1) {
@@ -1179,7 +1662,7 @@ class GameRoom {
         }
 
         // Record entry price for agent/hero
-        const entryPrice = (botType === 'agent' || botType === 'hero') ? currentEntryFee : 0;
+        const entryPrice = (this.type === 'competitive' && (botType === 'agent' || botType === 'hero')) ? currentEntryFee : 0;
 
         const id = Math.random().toString(36).substr(2, 5);
         this.waitingRoom[id] = {
@@ -1243,9 +1726,12 @@ createRoom('performance');
 
 // Auto-create additional performance rooms based on registered agent bots
 const agentCount = Object.values(botRegistry).filter(b => b.botType === 'agent' && b.scriptPath).length;
-if (agentCount > 5) {
+const roomsNeeded = Math.min(ROOM_LIMITS.performance, Math.ceil(agentCount / 8));
+for (let i = performanceRooms.length; i < roomsNeeded; i++) {
     createRoom('performance');
-    log.important('[Init] Created performance-2 (found ' + agentCount + ' agent bots)');
+}
+if (performanceRooms.length > 1) {
+    log.important(`[Init] Created ${performanceRooms.length} performance rooms for ${agentCount} bots`);
 }
 
 // Competitive arena - only one room, seeded with normal bots
@@ -1254,7 +1740,7 @@ function createCompetitiveRoom() {
     const room = new GameRoom({ id, type: 'competitive' });
     rooms.set(id, room);
     competitiveRooms.push(room);
-    seedNormalBots(room, 6); // Fewer bots for longer matches
+    seedNormalBots(room, 10);
     
     // Periodically check and auto-fill with registered agent bots
     setInterval(() => {
@@ -1273,8 +1759,8 @@ function autoFillCompetitiveRoom(room) {
         if (p.botId) currentBotIds.add(p.botId);
     });
     
-    // Check paid entries for this match
-    const paidForMatch = room.paidEntries[room.matchNumber] || [];
+    // Check paid entries for this match (keyed by displayMatchId string)
+    const paidForMatch = room.paidEntries[room.displayMatchId] || [];
     
     // Add paid entries first
     for (const botId of paidForMatch) {
@@ -1627,7 +2113,10 @@ wss.on('connection', (ws, req) => {
                     return;
                 }
 
+                // Ensure client is only in the correct room's client set
+                rooms.forEach(r => r.clients.delete(ws));
                 room.clients.add(ws);
+                
                 const res = room.handleJoin(data, ws);
                 if (isImportant) {
                     log.important(`[Join] ${data.name} result: ${res.ok ? 'OK' : res.reason}`);
@@ -1661,6 +2150,16 @@ function createBotId() {
     return 'bot_' + Math.random().toString(36).slice(2, 8);
 }
 
+function generateRegCode() {
+    // Generate 8-character alphanumeric code (uppercase)
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let code = '';
+    for (let i = 0; i < 8; i++) {
+        code += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return code;
+}
+
 function getRoomStatus(room) {
     return {
         id: room.id,
@@ -1683,13 +2182,31 @@ function leaderboardFromHistory(filterArenaId = null) {
     });
     return Object.entries(counts)
         .map(([name, wins]) => ({ name, wins }))
-        .sort((a,b)=>b.wins-a.wins);
+        .sort((a,b)=>b.wins-a.wins)
+        .slice(0, 30);
 }
 
 app.post('/api/bot/register', rateLimit({ windowMs: 60_000, max: 10 }), (req, res) => {
-    const { name, price, owner, botType } = req.body || {};
+    const { name, price, owner, botType, regCode } = req.body || {};
+
+    // If regCode provided, look up existing bot by its registration code
+    if (regCode) {
+        const cleanCode = regCode.toString().toUpperCase().slice(0, 8);
+        const found = Object.entries(botRegistry).find(([, m]) => m.regCode === cleanCode);
+        if (!found) {
+            return res.status(400).json({ error: 'invalid_code', message: 'Invalid or expired registration code' });
+        }
+        const [botId, botMeta] = found;
+        if (owner) {
+            botMeta.owner = owner.toString().slice(0, 64);
+            saveBotRegistry();
+        }
+        log.important('[Register] Bot ' + botMeta.name + ' (' + botId + ') claimed via regCode by ' + (owner || 'unknown'));
+        return res.json({ ok: true, botId, name: botMeta.name });
+    }
+
     const safeName = (name || 'AgentBot').toString().slice(0, MAX_NAME_LEN);
-    
+
     // Check name uniqueness
     const existingName = Object.values(botRegistry).find(m => m.name === safeName);
     if (existingName) {
@@ -1697,20 +2214,36 @@ app.post('/api/bot/register', rateLimit({ windowMs: 60_000, max: 10 }), (req, re
     }
     const safePrice = Number(price || 0);
     const id = createBotId();
+    const newRegCode = generateRegCode();
     botRegistry[id] = {
         id,
         name: safeName,
         owner: (owner || 'unknown').toString().slice(0, 64),
         price: isNaN(safePrice) ? 0 : safePrice,
         botType: botType || 'agent',
-        credits: 99999,
-        createdAt: Date.now()
+        credits: 20,
+        createdAt: Date.now(),
+        regCode: newRegCode
     };
     saveBotRegistry();
+
+    // Create bot on-chain (non-blocking)
+    if (botRegistryContract) {
+        botRegistryContract.createBot(
+            ethers.encodeBytes32String(id),
+            safeName,
+            ethers.ZeroAddress
+        ).then(tx => tx.wait()).then(() => {
+            log.important(`[Blockchain] Bot ${id} created on-chain via /register`);
+        }).catch(err => {
+            log.warn('[Blockchain] Failed to create bot on-chain via /register:', err.message);
+        });
+    }
 
     // auto-assign room on register (performance by default)
     const room = assignRoomForJoin({ name: botRegistry[id].name, botType: botRegistry[id].botType, botPrice: botRegistry[id].price || 0, arenaType: 'performance' });
     const payload = { ...botRegistry[id] };
+    payload.regCode = regCode;
     if (room) {
         payload.arenaId = room.id;
         payload.wsUrl = 'ws://' + req.headers.host + '?arenaId=' + room.id;
@@ -1729,6 +2262,15 @@ app.post('/api/bot/set-price', requireAdminKey, (req, res) => {
     res.json({ ok: true, bot: botRegistry[botId] });
 });
 
+// --- My Bots (by owner address) ---
+app.get('/api/bot/my-bots', (req, res) => {
+    const { owner } = req.query;
+    if (!owner) return res.status(400).json({ error: 'missing_owner' });
+    const ownerLower = owner.toString().toLowerCase();
+    const myBots = Object.values(botRegistry).filter(b => (b.owner || '').toLowerCase() === ownerLower);
+    res.json(myBots);
+});
+
 // --- Bot Lookup by Name (must be before :botId route) ---
 app.get('/api/bot/lookup', (req, res) => {
     const { name } = req.query;
@@ -1736,6 +2278,19 @@ app.get('/api/bot/lookup', (req, res) => {
     const entry = Object.entries(botRegistry).find(([_, m]) => m.name === name.toString());
     if (!entry) return res.status(404).json({ error: 'bot_not_found' });
     res.json({ botId: entry[0], name: entry[1].name, credits: entry[1].credits });
+});
+
+// Get registration fee - MUST be before /api/bot/:botId
+app.get('/api/bot/registration-fee', async (req, res) => {
+    try {
+        if (!botRegistryContract) {
+            return res.status(503).json({ error: 'contracts_not_initialized' });
+        }
+        const fee = await botRegistryContract.registrationFee();
+        res.json({ fee: ethers.formatEther(fee), feeWei: fee.toString() });
+    } catch (e) {
+        res.status(500).json({ error: 'query_failed', message: e.message });
+    }
 });
 
 app.get('/api/bot/:botId', (req, res) => {
@@ -1776,6 +2331,14 @@ app.get('/api/arena/status', (req, res) => {
             gameState: r.gameState,
             obstacleCount: r.obstacles ? r.obstacles.filter(o => o.solid).length : 0,
         })),
+        workers: {
+            count: activeWorkers.size,
+            ids: Array.from(activeWorkers.keys()),
+            details: Array.from(activeWorkers.entries()).map(([id, w]) => ({
+                id,
+                threadId: w.threadId,
+            }))
+        }
     });
 })
 
@@ -1808,7 +2371,7 @@ app.post('/api/arena/kick', requireAdminKey, (req, res) => {
 });
 
 // --- Bot Registration (unlimited plays) ---
-app.post('/api/bot/register-unlimited', (req, res) => {
+app.post('/api/bot/register-unlimited', requireAdminKey, (req, res) => {
     const { botId, txHash } = req.body || {};
     if (!botId) return res.status(400).json({ error: 'missing_botId' });
     
@@ -1827,20 +2390,93 @@ app.post('/api/bot/register-unlimited', (req, res) => {
 });
 
 
+// --- Edit Token (NFT-gated bot code editing) ---
+app.post('/api/bot/edit-token', rateLimit({ windowMs: 60_000, max: 20 }), async (req, res) => {
+    try {
+        const { botId, address, signature, timestamp } = req.body || {};
+        if (!botId || !address || !signature || !timestamp) {
+            return res.status(400).json({ error: 'missing_params', message: 'botId, address, signature, timestamp required' });
+        }
+
+        // 1. Check timestamp freshness (within 5 minutes)
+        const ts = parseInt(timestamp);
+        if (isNaN(ts) || Math.abs(Date.now() - ts) > 5 * 60 * 1000) {
+            return res.status(400).json({ error: 'expired_timestamp', message: 'Timestamp must be within 5 minutes' });
+        }
+
+        // 2. Verify wallet signature
+        const message = `Snake Arena Edit: ${botId} at ${timestamp}`;
+        let recovered;
+        try {
+            recovered = ethers.verifyMessage(message, signature);
+        } catch (e) {
+            return res.status(400).json({ error: 'invalid_signature' });
+        }
+        if (recovered.toLowerCase() !== address.toLowerCase()) {
+            return res.status(403).json({ error: 'signature_mismatch', message: 'Signature does not match address' });
+        }
+
+        // 3. Verify NFT ownership on-chain
+        if (!snakeBotNFTContract) {
+            return res.status(503).json({ error: 'contract_not_ready' });
+        }
+        try {
+            const tokenId = await snakeBotNFTContract.botToTokenId(ethers.encodeBytes32String(botId));
+            if (tokenId === 0n) {
+                return res.status(403).json({ error: 'not_registered', message: 'Bot not registered (no NFT)' });
+            }
+            const nftOwner = await snakeBotNFTContract.ownerOf(tokenId);
+            if (nftOwner.toLowerCase() !== address.toLowerCase()) {
+                return res.status(403).json({ error: 'not_nft_owner', message: 'Address does not own the NFT for this bot' });
+            }
+        } catch (e) {
+            return res.status(403).json({ error: 'nft_check_failed', message: e.message });
+        }
+
+        // 4. Generate edit token (valid 24 hours)
+        const { randomBytes } = require('crypto');
+        const token = randomBytes(32).toString('hex');
+        const expires = Date.now() + 24 * 3600 * 1000;
+        editTokens.set(token, { botId, address: address.toLowerCase(), expires });
+
+        log.important(`[EditToken] Issued for bot ${botId} to ${address}`);
+        res.json({ token, expires, botId, validHours: 24 });
+    } catch (e) {
+        res.status(500).json({ error: 'server_error', message: e.message });
+    }
+});
+
+// Look up numeric matchId by displayMatchId (e.g. "P2" → 5)
+app.get('/api/match/by-display-id', (req, res) => {
+    const { id } = req.query;
+    if (!id) return res.status(400).json({ error: 'missing id' });
+    const matchId = displayIdToMatchId[id.toUpperCase()];
+    if (matchId == null) return res.status(404).json({ error: 'not_found', message: 'No match found for ' + id });
+    res.json({ displayMatchId: id.toUpperCase(), matchId });
+});
+
 // --- Competitive Arena API ---
 app.get('/api/competitive/status', (req, res) => {
     const room = rooms.get('competitive-1');
     if (!room) return res.status(404).json({ error: 'no_competitive_room' });
     
+    // Use matchId from room (this is the global match ID)
+    // room.currentMatchId is set to nextMatchId() in constructor
+    const currentMatchId = room.currentMatchId || 0;
+    
     res.json({
-        matchNumber: room.matchNumber,
-        matchId: room.currentMatchId,
+        displayMatchId: room.displayMatchId,
+        matchNumber: currentMatchId,
+        internalMatchNumber: room.matchNumber,
+        matchId: currentMatchId,
+        epoch: getCurrentEpoch(),
         gameState: room.gameState,
         timeLeft: room.timerSeconds,
         matchTimeLeft: room.matchTimeLeft,
         obstacleCount: room.obstacles.filter(o => o.solid).length,
         playerCount: Object.keys(room.players).length + Object.keys(room.waitingRoom).length,
         maxPlayers: room.maxPlayers,
+        entryFee: currentEntryFee,
     });
 });
 
@@ -1856,43 +2492,68 @@ app.get('/api/competitive/registered', (req, res) => {
 });
 
 app.post('/api/competitive/enter', (req, res) => {
-    const { botId, matchNumber, txHash } = req.body || {};
-    
-    if (!botId || !matchNumber) {
-        return res.status(400).json({ error: 'missing_params', message: 'botId and matchNumber required' });
+    const { botId, displayMatchId, txHash } = req.body || {};
+
+    if (!botId || !displayMatchId || !txHash) {
+        return res.status(400).json({ error: 'missing_params', message: 'botId, displayMatchId and txHash required' });
     }
-    
+
     const meta = botRegistry[botId];
     if (!meta || meta.botType !== 'agent') {
         return res.status(404).json({ error: 'bot_not_found', message: 'Bot must be a registered agent' });
     }
-    
+
     const room = rooms.get('competitive-1');
     if (!room) return res.status(500).json({ error: 'no_competitive_room' });
-    
-    if (matchNumber < room.matchNumber) {
-        return res.status(400).json({ error: 'invalid_match', message: 'Match number must be >= current match #' + room.matchNumber });
+
+    // Compare numeric part: "A4" vs "A3" → 4 >= 3 ✓
+    const parseNum = (s) => parseInt(String(s).replace(/^[A-Za-z]+/, '')) || 0;
+    if (parseNum(displayMatchId) < parseNum(room.displayMatchId)) {
+        return res.status(400).json({ error: 'invalid_match', message: 'Match must be >= current ' + room.displayMatchId });
     }
-    
-    // Record paid entry
-    if (!room.paidEntries[matchNumber]) {
-        room.paidEntries[matchNumber] = [];
+
+    // Record paid entry keyed by displayMatchId string
+    if (!room.paidEntries[displayMatchId]) {
+        room.paidEntries[displayMatchId] = [];
     }
-    room.paidEntries[matchNumber].push(botId);
-    
-    // Clean up old paid entries (keep only future matches)
-    for (const mn of Object.keys(room.paidEntries)) {
-        if (parseInt(mn) < room.matchNumber) {
-            delete room.paidEntries[mn];
+    room.paidEntries[displayMatchId].push(botId);
+
+    // Clean up past entries
+    const currentNum = parseNum(room.displayMatchId);
+    for (const key of Object.keys(room.paidEntries)) {
+        if (parseNum(key) < currentNum) {
+            delete room.paidEntries[key];
         }
     }
-    
-    log.important('[Competitive] Paid entry registered: ' + meta.name + ' (' + botId + ') for match #' + matchNumber + ' tx:' + (txHash || 'none'));
-    
-    res.json({ ok: true, matchNumber, botId, message: 'Entry confirmed for match #' + matchNumber });
+
+    log.important('[Competitive] Paid entry registered: ' + meta.name + ' (' + botId + ') for ' + displayMatchId + ' tx:' + txHash);
+
+    res.json({ ok: true, displayMatchId, botId, message: 'Entry confirmed for ' + displayMatchId });
 });
 
 app.post("/api/admin/reset-leaderboard", requireAdminKey, (req, res) => {    matchHistory = [];    matchNumber = 0;    fs.writeFileSync(HISTORY_FILE, "[]");    log.important("[Admin] Leaderboard reset");    res.json({ ok: true, message: "Leaderboard reset" });});
+
+// Admin: create bot on-chain for an existing local bot that missed the createBot tx
+app.post('/api/admin/create-on-chain', requireAdminKey, async (req, res) => {
+    const { botId } = req.body || {};
+    if (!botId) return res.status(400).json({ error: 'missing_botId' });
+    const bot = botRegistry[botId];
+    if (!bot) return res.status(404).json({ error: 'bot_not_found' });
+    if (!botRegistryContract) return res.status(503).json({ error: 'contract_not_ready' });
+    try {
+        const tx = await botRegistryContract.createBot(
+            ethers.encodeBytes32String(botId),
+            bot.name,
+            ethers.ZeroAddress
+        );
+        const receipt = await tx.wait();
+        log.important(`[Admin] Bot ${botId} (${bot.name}) created on-chain. tx: ${receipt.hash}`);
+        res.json({ ok: true, botId, name: bot.name, txHash: receipt.hash });
+    } catch (e) {
+        log.warn('[Admin] createBot on-chain failed:', e.message);
+        res.status(500).json({ error: 'tx_failed', message: e.message });
+    }
+});
 app.get('/api/leaderboard/global', (req, res) => {
     res.json(leaderboardFromHistory());
 });
@@ -1906,7 +2567,7 @@ app.get('/api/leaderboard/performance', (req, res) => {
         const key = h.winner || 'No Winner';
         counts[key] = (counts[key] || 0) + 1;
     });
-    res.json(Object.entries(counts).map(([name, wins]) => ({ name, wins })).sort((a,b)=>b.wins-a.wins));
+    res.json(Object.entries(counts).map(([name, wins]) => ({ name, wins })).sort((a,b)=>b.wins-a.wins).slice(0, 30));
 });
 
 app.get('/api/leaderboard/competitive', (req, res) => {
@@ -1917,7 +2578,7 @@ app.get('/api/leaderboard/competitive', (req, res) => {
         const key = h.winner || 'No Winner';
         counts[key] = (counts[key] || 0) + 1;
     });
-    res.json(Object.entries(counts).map(([name, wins]) => ({ name, wins })).sort((a,b)=>b.wins-a.wins));
+    res.json(Object.entries(counts).map(([name, wins]) => ({ name, wins })).sort((a,b)=>b.wins-a.wins).slice(0, 30));
 });
 
 app.get('/api/leaderboard/arena/:arenaId', (req, res) => {
@@ -1936,6 +2597,25 @@ app.post('/api/bot/upload', rateLimit({ windowMs: 60_000, max: 10 }), async (req
         }
         if (scriptContent.length > 200_000) {
             return res.status(413).json({ error: 'payload_too_large' });
+        }
+
+        // 0. If updating existing bot, verify edit token
+        if (botId) {
+            const token = req.headers['x-edit-token'];
+            if (!token) {
+                return res.status(401).json({ error: 'auth_required', message: 'x-edit-token header required to update existing bot' });
+            }
+            const tokenData = editTokens.get(token);
+            if (!tokenData) {
+                return res.status(403).json({ error: 'invalid_token', message: 'Invalid edit token' });
+            }
+            if (tokenData.botId !== botId) {
+                return res.status(403).json({ error: 'token_bot_mismatch', message: 'Token is for a different bot' });
+            }
+            if (tokenData.expires < Date.now()) {
+                editTokens.delete(token);
+                return res.status(403).json({ error: 'token_expired', message: 'Edit token expired, please re-authenticate' });
+            }
         }
 
         // 1. Static Scan
@@ -1957,17 +2637,24 @@ app.post('/api/bot/upload', rateLimit({ windowMs: 60_000, max: 10 }), async (req
             }
         }
 
+        // Get owner from query (optional, for tracking who uploaded)
+        const owner = req.query.owner?.toString().toLowerCase() || null;
+
         // 3. Resolve Bot ID
         let targetBotId = botId;
+        let isNewBot = false;
         if (!targetBotId) {
             // Create new bot if no ID provided
             targetBotId = createBotId();
+            isNewBot = true;
             botRegistry[targetBotId] = {
                 id: targetBotId,
                 name: (name || 'Bot-' + targetBotId.substr(-4)).toString().slice(0, 32),
-                credits: 99999,
+                credits: 20,
                 botType: 'agent',
-                createdAt: Date.now()
+                createdAt: Date.now(),
+                owner: owner,
+                regCode: generateRegCode() // Generate registration code for new bots
             };
         } else if (!botRegistry[targetBotId]) {
             return res.status(404).json({ error: 'bot_not_found' });
@@ -1980,7 +2667,26 @@ app.post('/api/bot/upload', rateLimit({ windowMs: 60_000, max: 10 }), async (req
         botRegistry[targetBotId].scriptPath = scriptPath;
         // Update name if provided
         if (name) botRegistry[targetBotId].name = name.toString().slice(0, 32);
+        // Update owner if provided and not already set
+        if (owner && !botRegistry[targetBotId].owner) botRegistry[targetBotId].owner = owner;
         saveBotRegistry();
+
+        // 4. Create bot on-chain (if new bot)
+        if (botRegistryContract && !botId) {
+            try {
+                const botName = botRegistry[targetBotId].name;
+                const tx = await botRegistryContract.createBot(
+                    ethers.encodeBytes32String(targetBotId),
+                    botName,
+                    ethers.ZeroAddress // Initially unclaimed
+                );
+                await tx.wait();
+                log.important(`[Blockchain] Bot ${targetBotId} created on-chain`);
+            } catch (chainErr) {
+                log.warn('[Blockchain] Failed to create bot on-chain:', chainErr.message);
+                // Non-blocking: bot still works locally even if chain fails
+            }
+        }
 
         // Auto-assign/kick rule: each uploaded agent bot kicks one normal bot
         if ((botRegistry[targetBotId].botType || 'agent') === 'agent') {
@@ -1990,7 +2696,21 @@ app.post('/api/bot/upload', rateLimit({ windowMs: 60_000, max: 10 }), async (req
         // 4. Auto-start bot (restart if already running, start if new)
         startBotWorker(targetBotId);
 
-        res.json({ ok: true, botId: targetBotId, message: 'Bot uploaded and started successfully.' });
+        const response = { 
+            ok: true, 
+            botId: targetBotId, 
+            name: botRegistry[targetBotId].name,
+            owner: botRegistry[targetBotId].owner,
+            running: botRegistry[targetBotId].running || false,
+            message: 'Bot uploaded and started successfully.' 
+        };
+        
+        // Include registration code for new bots
+        if (isNewBot && botRegistry[targetBotId].regCode) {
+            response.regCode = botRegistry[targetBotId].regCode;
+        }
+        
+        res.json(response);
     } catch (e) {
         console.error(e);
         res.status(500).json({ error: 'upload_failed' });
@@ -2001,8 +2721,19 @@ app.post('/api/bot/start', requireAdminKey, (req, res) => {
     const { botId } = req.body;
     if (!botRegistry[botId]) return res.status(404).json({ error: 'bot_not_found' });
     
+    // Check if worker is actually alive, not just in the map
     if (activeWorkers.has(botId)) {
-        return res.json({ ok: true, message: 'Already running' });
+        const existingWorker = activeWorkers.get(botId);
+        // Worker threads don't have a direct isRunning property, 
+        // but we can check if it's still in the map after a small delay
+        // For now, force restart by terminating existing worker
+        console.log(`[Worker] Bot ${botId} already in map, force restarting...`);
+        try {
+            existingWorker.terminate();
+        } catch (e) {
+            // Ignore terminate errors
+        }
+        activeWorkers.delete(botId);
     }
     
     startBotWorker(botId);
@@ -2017,13 +2748,165 @@ app.post('/api/bot/stop', requireAdminKey, (req, res) => {
     res.json({ ok: true, message: 'Bot stopped' });
 });
 
-// --- Betting (MVP, in-memory) ---
-const betPools = {}; // matchId -> { total: 0, bets: [] }
-
-app.post('/api/bet/place', (req, res) => {
-    // bettor is the wallet address, txHash is the transaction hash on Base Sepolia
-    const { matchId, botId, amount, txHash, bettor } = req.body || {};
+// Get user's bots (by owner address)
+app.get('/api/user/bots', (req, res) => {
+    const { address } = req.query;
+    if (!address) {
+        return res.status(400).json({ error: 'Missing address parameter' });
+    }
     
+    const normalizedAddress = address.toString().toLowerCase();
+    
+    // Find all bots owned by this address
+    const userBots = Object.entries(botRegistry)
+        .filter(([id, bot]) => bot.owner?.toLowerCase() === normalizedAddress)
+        .map(([id, bot]) => ({
+            botId: id,
+            name: bot.name,
+            credits: bot.credits,
+            running: bot.running || false,
+            botType: bot.botType || 'agent',
+            createdAt: bot.createdAt,
+            preferredArenaId: bot.preferredArenaId || null
+        }));
+    
+    res.json({ ok: true, bots: userBots, count: userBots.length });
+});
+
+// Get bot by name (for claiming)
+app.get('/api/bot/by-name/:name', (req, res) => {
+    const { name } = req.params;
+    if (!name) {
+        return res.status(400).json({ error: 'Missing name parameter' });
+    }
+    
+    // Find bot by name (case insensitive)
+    const botEntry = Object.entries(botRegistry).find(([id, bot]) => 
+        bot.name.toLowerCase() === name.toLowerCase()
+    );
+    
+    if (!botEntry) {
+        return res.status(404).json({ error: 'bot_not_found', message: 'Bot not found' });
+    }
+    
+    const [botId, bot] = botEntry;
+    
+    res.json({
+        ok: true,
+        botId: botId,
+        name: bot.name,
+        owner: bot.owner,
+        credits: bot.credits,
+        running: bot.running || false,
+        botType: bot.botType || 'agent',
+        createdAt: bot.createdAt
+    });
+});
+
+// Claim bot ownership
+app.post('/api/bot/claim', async (req, res) => {
+    const { name, address, signature, timestamp } = req.body;
+
+    if (!name || !address || !signature || !timestamp) {
+        return res.status(400).json({ error: 'Missing name, address, signature or timestamp' });
+    }
+
+    // Reject stale signatures (5 minute window)
+    const ts = parseInt(timestamp);
+    if (!ts || Math.abs(Date.now() - ts) > 5 * 60 * 1000) {
+        return res.status(401).json({ error: 'auth_expired', message: 'Signature expired' });
+    }
+
+    // Verify wallet signature
+    try {
+        const message = `Claim Snake Arena Bot\nName: ${name}\nAddress: ${address}\nTimestamp: ${timestamp}`;
+        const recovered = ethers.verifyMessage(message, signature);
+        if (recovered.toLowerCase() !== address.toLowerCase()) {
+            return res.status(401).json({ error: 'invalid_signature' });
+        }
+    } catch (e) {
+        return res.status(401).json({ error: 'invalid_signature' });
+    }
+
+    // Find bot by name
+    const botEntry = Object.entries(botRegistry).find(([id, bot]) =>
+        bot.name.toLowerCase() === name.toLowerCase()
+    );
+
+    if (!botEntry) {
+        return res.status(404).json({ error: 'bot_not_found' });
+    }
+
+    const [botId, bot] = botEntry;
+
+    // Check if already owned
+    if (bot.owner && bot.owner !== 'unknown') {
+        return res.status(400).json({ error: 'already_claimed', message: 'This bot is already claimed' });
+    }
+
+    // Claim ownership
+    botRegistry[botId].owner = address.toLowerCase();
+    saveBotRegistry();
+
+    res.json({
+        ok: true,
+        message: 'Bot claimed successfully',
+        botId: botId,
+        name: bot.name,
+        owner: address.toLowerCase()
+    });
+});
+
+// --- Betting ---
+const betPools = {}; // matchId -> { total: 0, bets: [] } (mirrors on-chain for fast reads)
+const betRecords = {}; // matchId -> [{bettor, botId, amount (USDC units)}] for points calculation
+
+// Get on-chain pool info for a match
+app.get('/api/bet/pool', async (req, res) => {
+    const { matchId } = req.query;
+    if (!matchId) return res.status(400).json({ error: 'missing matchId' });
+    const mid = parseInt(matchId);
+    if (isNaN(mid)) return res.status(400).json({ error: 'invalid matchId' });
+
+    if (!pariMutuelContract) {
+        return res.json({ matchId: mid, totalPool: '0', settled: false, exists: false });
+    }
+    try {
+        const m = await pariMutuelContract.matches(mid);
+        const exists = Number(m.matchId) !== 0;
+        res.json({
+            matchId: mid,
+            totalPool: ethers.formatUnits(m.totalPool, 6), // USDC has 6 decimals
+            totalPoolWei: m.totalPool.toString(),
+            settled: m.settled,
+            cancelled: m.cancelled,
+            exists,
+            startTime: Number(m.startTime),
+            bettingOpen: exists && !m.settled && !m.cancelled && (Date.now() / 1000 < Number(m.startTime) + 300)
+        });
+    } catch (e) {
+        res.json({ matchId: mid, totalPool: '0', settled: false, exists: false, error: e.message });
+    }
+});
+
+// Get user's potential winnings for a match
+app.get('/api/bet/winnings', async (req, res) => {
+    const { matchId, address } = req.query;
+    if (!matchId || !address) return res.status(400).json({ error: 'missing matchId or address' });
+    const mid = parseInt(matchId);
+    if (!pariMutuelContract) return res.json({ winnings: '0' });
+    try {
+        const w = await pariMutuelContract.getUserPotentialWinnings(mid, address);
+        res.json({ winnings: ethers.formatUnits(w, 6), winningsWei: w.toString() }); // USDC 6 decimals
+    } catch (e) {
+        res.json({ winnings: '0', error: e.message });
+    }
+});
+
+const handleBetPlace = (req, res) => {
+    // bettor is the wallet address, txHash is the transaction hash on Base Sepolia
+    const { matchId, botId, amount, txHash, bettor, arenaType } = req.body || {};
+
     if (!matchId || !botId || !amount) {
         return res.status(400).json({ error: 'Missing required fields: matchId, botId, amount' });
     }
@@ -2039,34 +2922,82 @@ app.post('/api/bet/place', (req, res) => {
     }
 
     // Record the bet
-    betPools[matchId].bets.push({ 
-        botId, 
+    betPools[matchId].bets.push({
+        botId,
         amount: betAmount,
         bettor: bettor || 'anonymous',
         txHash: txHash || null,
+        arenaType: arenaType || null,
         timestamp: Date.now()
     });
 
     betPools[matchId].total += betAmount;
 
-    console.log(`[Bet] New bet on match #${matchId}: ${betAmount} ETH on ${botId} by ${bettor} (Tx: ${txHash})`);
+    // Also record in betRecords for points system (amount stored in raw units from chain)
+    if (!betRecords[matchId]) betRecords[matchId] = [];
+    betRecords[matchId].push({
+        bettor: bettor || 'anonymous',
+        botId,
+        amount: betAmount, // raw USDC units (6 decimals) as passed from frontend
+        txHash: txHash || null,
+        arenaType: arenaType || null,
+        timestamp: Date.now()
+    });
 
-    res.json({ 
-        ok: true, 
+    console.log(`[Prediction] New prediction on match #${matchId}: ${betAmount} USDC units on ${botId} by ${bettor} (Tx: ${txHash}, arena: ${arenaType || 'unknown'})`);
+
+    res.json({
+        ok: true,
         total: betPools[matchId].total,
         matchId,
         yourBet: { botId, amount: betAmount }
     });
-});
+};
 
-app.get('/api/bet/status', (req, res) => {
+const handleBetStatus = (req, res) => {
     const matchId = req.query.matchId;
     if (!matchId || !betPools[matchId]) return res.json({ total: 0, bets: [] });
     res.json(betPools[matchId]);
-});
+};
+
+app.post('/api/bet/place', handleBetPlace);
+app.get('/api/bet/status', handleBetStatus);
+// Prediction aliases (same handlers, new naming)
+app.post('/api/prediction/place', handleBetPlace);
+app.get('/api/prediction/status', handleBetStatus);
 
 app.post('/api/bet/claim', (req, res) => {
     res.json({ ok: true });
+});
+
+// --- Points API ---
+app.get('/api/points/my', (req, res) => {
+    const { address } = req.query;
+    if (!address) return res.status(400).json({ error: 'missing address' });
+    const addr = address.toLowerCase();
+    const data = pointsData[addr] || { points: 0, history: [] };
+    // Include rank
+    const sorted = Object.entries(pointsData)
+        .sort(([, a], [, b]) => b.points - a.points);
+    const rank = sorted.findIndex(([a]) => a === addr) + 1;
+    res.json({
+        address: addr,
+        points: data.points,
+        rank: rank > 0 ? rank : null,
+        history: (data.history || []).slice(-20).reverse() // last 20, newest first
+    });
+});
+
+app.get('/api/points/leaderboard', (req, res) => {
+    const sorted = Object.entries(pointsData)
+        .sort(([, a], [, b]) => b.points - a.points)
+        .slice(0, 20)
+        .map(([address, data], idx) => ({
+            rank: idx + 1,
+            address,
+            points: data.points
+        }));
+    res.json(sorted);
 });
 
 // Replay APIs
@@ -2105,9 +3036,348 @@ app.get('/api/replay/:matchId', (req, res) => {
 
 app.get('/history', (req, res) => res.json(matchHistory));
 
+// --- NEW: Blockchain Integration APIs ---
+
+// Get on-chain bot info
+app.get('/api/bot/onchain/:botId', async (req, res) => {
+    try {
+        const { botId } = req.params;
+        if (!botRegistryContract) {
+            return res.status(503).json({ error: 'contracts_not_initialized' });
+        }
+        
+        const bot = await botRegistryContract.getBotById(ethers.encodeBytes32String(botId));
+        res.json({
+            botId: bot.botId,
+            botName: bot.botName,
+            owner: bot.owner,
+            registered: bot.registered,
+            registeredAt: Number(bot.registeredAt) * 1000,
+            matchesPlayed: Number(bot.matchesPlayed),
+            totalEarnings: ethers.formatEther(bot.totalEarnings),
+            salePrice: ethers.formatEther(bot.salePrice),
+            forSale: bot.salePrice > 0
+        });
+    } catch (e) {
+        log.error('[API] /api/bot/onchain error:', e.message);
+        res.status(500).json({ error: 'query_failed', message: e.message });
+    }
+});
+
+// Get user's on-chain bots
+// Uses local botRegistry as source of truth for ownership (bypasses broken ownerBots mapping in contract)
+app.get('/api/user/onchain-bots', async (req, res) => {
+    try {
+        const { wallet } = req.query;
+        if (!wallet || !ethers.isAddress(wallet)) {
+            return res.status(400).json({ error: 'invalid_wallet_address' });
+        }
+
+        const walletLower = wallet.toString().toLowerCase();
+
+        // Find bots in local registry owned by this wallet
+        const localBots = Object.entries(botRegistry)
+            .filter(([, m]) => m.owner && m.owner.toLowerCase() === walletLower);
+
+        const bots = await Promise.all(localBots.map(async ([id, meta]) => {
+            let registered = false;
+            let salePrice = '0';
+            let forSale = false;
+            let matchesPlayed = 0;
+            let totalEarnings = '0';
+
+            // Try to get on-chain status for this bot
+            if (botRegistryContract) {
+                try {
+                    const onchain = await botRegistryContract.getBotById(ethers.encodeBytes32String(id));
+                    registered = onchain.registered;
+                    salePrice = ethers.formatEther(onchain.salePrice);
+                    forSale = onchain.salePrice > 0n;
+                    matchesPlayed = Number(onchain.matchesPlayed);
+                    totalEarnings = ethers.formatEther(onchain.totalEarnings);
+                } catch (e) {
+                    // Bot not on chain yet — registered stays false
+                }
+            }
+
+            return {
+                botId: id,
+                name: meta.name,       // BotSlot uses .name for display
+                botName: meta.name,
+                owner: meta.owner,     // BotSlot needs .owner for isOwner check
+                registered,
+                salePrice,
+                forSale,
+                matchesPlayed,
+                totalEarnings
+            };
+        }));
+
+        res.json({ bots });
+    } catch (e) {
+        log.error('[API] /api/user/onchain-bots error:', e.message);
+        res.status(500).json({ error: 'query_failed', message: e.message });
+    }
+});
+
+// Get marketplace listings
+app.get('/api/marketplace/listings', async (req, res) => {
+    try {
+        const { offset = 0, limit = 20 } = req.query;
+        if (!botRegistryContract) {
+            return res.status(503).json({ error: 'contracts_not_initialized' });
+        }
+        
+        const listings = await botRegistryContract.getBotsForSale(offset, limit);
+        const formatted = listings.map(bot => ({
+            botId: ethers.decodeBytes32String(bot.botId).replace(/\0/g, ''),
+            botName: bot.botName,
+            owner: bot.owner,
+            registered: bot.registered,
+            matchesPlayed: Number(bot.matchesPlayed),
+            totalEarnings: ethers.formatEther(bot.totalEarnings),
+            price: ethers.formatEther(bot.salePrice),
+            priceWei: bot.salePrice.toString()
+        }));
+        res.json({ listings: formatted });
+    } catch (e) {
+        log.error('[API] /api/marketplace/listings error:', e.message);
+        res.status(500).json({ error: 'query_failed', message: e.message });
+    }
+});
+
+// Get bot NFT info
+app.get('/api/bot/nft/:botId', async (req, res) => {
+    try {
+        const { botId } = req.params;
+        if (!snakeBotNFTContract) {
+            return res.status(503).json({ error: 'nft_contract_not_initialized' });
+        }
+        
+        // Get tokenId for this bot
+        const tokenId = await snakeBotNFTContract.botToTokenId(ethers.encodeBytes32String(botId));
+        
+        if (tokenId === 0n) {
+            return res.json({ hasNFT: false, botId });
+        }
+        
+        // Get tokenURI
+        const tokenURI = await snakeBotNFTContract.tokenURI(tokenId);
+        const owner = await snakeBotNFTContract.ownerOf(tokenId);
+        
+        res.json({
+            hasNFT: true,
+            botId,
+            tokenId: Number(tokenId),
+            tokenURI,
+            owner
+        });
+    } catch (e) {
+        log.error('[API] /api/bot/nft error:', e.message);
+        res.status(500).json({ error: 'query_failed', message: e.message });
+    }
+});
+
+// Get pending rewards for a bot
+app.get('/api/bot/rewards/:botId', async (req, res) => {
+    try {
+        const { botId } = req.params;
+        if (!rewardDistributorContract) {
+            return res.status(503).json({ error: 'contracts_not_initialized' });
+        }
+        
+        const pending = await rewardDistributorContract.pendingRewards(ethers.encodeBytes32String(botId));
+        const threshold = await rewardDistributorContract.MIN_CLAIM_THRESHOLD();
+        
+        res.json({
+            botId,
+            pendingRewards: ethers.formatEther(pending),
+            canClaim: pending >= threshold,
+            threshold: ethers.formatEther(threshold)
+        });
+    } catch (e) {
+        log.error('[API] /api/bot/rewards error:', e.message);
+        res.status(500).json({ error: 'query_failed', message: e.message });
+    }
+});
+
+// ============ REFERRAL SYSTEM APIs ============
+// Note: These APIs require wallet signature for authentication
+
+// EIP-712 domain for signature verification
+const REFERRAL_DOMAIN = {
+    name: 'SnakeArenaReferral',
+    version: '1',
+    chainId: 84532 // Base Sepolia
+};
+
+// Verify wallet signature
+async function verifyWalletSignature(address, message, signature) {
+    try {
+        const recovered = ethers.verifyMessage(message, signature);
+        return recovered.toLowerCase() === address.toLowerCase();
+    } catch (e) {
+        return false;
+    }
+}
+
+// Middleware: Require signature auth
+function requireSignatureAuth(req, res, next) {
+    const { address, signature, timestamp } = req.body || req.query || {};
+    
+    if (!address || !signature) {
+        return res.status(401).json({ error: 'auth_required', message: 'Wallet signature required' });
+    }
+    
+    // Check timestamp (prevent replay attacks) - 5 minute window
+    const ts = parseInt(timestamp);
+    if (!ts || Math.abs(Date.now() - ts) > 5 * 60 * 1000) {
+        return res.status(401).json({ error: 'auth_expired', message: 'Signature expired' });
+    }
+    
+    // Verify signature
+    const message = `SnakeArena Referral Auth\nAddress: ${address}\nTimestamp: ${timestamp}`;
+    if (!verifyWalletSignature(address, message, signature)) {
+        return res.status(401).json({ error: 'auth_invalid', message: 'Invalid signature' });
+    }
+    
+    req.authenticatedAddress = address.toLowerCase();
+    next();
+}
+
+// Get my referral stats (requires signature)
+app.post('/api/referral/my-stats', requireSignatureAuth, (req, res) => {
+    try {
+        const stats = getReferralStats(req.authenticatedAddress);
+        res.json({ ok: true, ...stats });
+    } catch (e) {
+        log.error('[Referral] my-stats error:', e.message);
+        res.status(500).json({ error: 'query_failed' });
+    }
+});
+
+// Generate claim signature (requires signature auth)
+app.post('/api/referral/claim-proof', requireSignatureAuth, async (req, res) => {
+    res.status(410).json({
+        error: 'deprecated',
+        message: 'Cash rewards have been replaced by points. Referral rewards are now awarded as points automatically.'
+    });
+});
+
+// Record referral registration (called by frontend after successful registerBot)
+// This is public but requires valid transaction proof
+app.post('/api/referral/record', async (req, res) => {
+    try {
+        const { user, inviter, txHash, amount } = req.body || {};
+        
+        if (!user || !inviter || !txHash) {
+            return res.status(400).json({ error: 'missing_params' });
+        }
+        
+        // Verify transaction exists and is valid
+        try {
+            const tx = await provider.getTransaction(txHash);
+            if (!tx || tx.to?.toLowerCase() !== CONTRACTS.botRegistry.toLowerCase()) {
+                return res.status(400).json({ error: 'invalid_tx' });
+            }
+            // Wait for confirmation
+            const receipt = await provider.waitForTransaction(txHash, 1, 30000);
+            if (!receipt || receipt.status !== 1) {
+                return res.status(400).json({ error: 'tx_failed' });
+            }
+        } catch (e) {
+            return res.status(400).json({ error: 'tx_verification_failed' });
+        }
+        
+        const success = recordReferral(user, inviter, txHash, parseFloat(amount) || 0.01);
+        
+        if (success) {
+            res.json({ ok: true, message: 'Referral recorded' });
+        } else {
+            res.status(400).json({ error: 'referral_failed', message: 'Already has inviter or invalid' });
+        }
+    } catch (e) {
+        log.error('[Referral] record error:', e.message);
+        res.status(500).json({ error: 'server_error' });
+    }
+});
+
+// Get public referral info (no auth required - for invite link)
+app.get('/api/referral/info/:address', (req, res) => {
+    try {
+        const address = req.params.address.toLowerCase();
+        const stats = getReferralStats(address);
+        
+        // Only return public info
+        res.json({
+            ok: true,
+            address: address,
+            inviteeCount: stats.inviteeCount,
+            code: address // Invite code is just the address
+        });
+    } catch (e) {
+        res.status(500).json({ error: 'query_failed' });
+    }
+});
+
+// Admin: Get all referral stats (protected by admin key)
+app.get('/api/admin/referral-stats', requireAdminKey, (req, res) => {
+    try {
+        const totalUsers = Object.keys(referralData.users).length;
+        const totalRewards = Object.values(referralData.rewards).reduce((sum, r) => sum + r.l1 + r.l2, 0);
+        
+        res.json({
+            ok: true,
+            totalUsers,
+            totalRewards,
+            users: referralData.users,
+            rewards: referralData.rewards
+        });
+    } catch (e) {
+        res.status(500).json({ error: 'query_failed' });
+    }
+});
+
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
     log.important(`🚀 Snake Arena running on port ${PORT}`);
+    // Initialize blockchain contracts
+    initContracts();
     // Resume bots after a short delay (let rooms initialize)
     setTimeout(resumeRunningBots, 3000);
+    // One-time purge of all existing replays (runs once, then flag file prevents re-run)
+    const replayDir = path.join(__dirname, 'replays');
+    const replayPurgeFlag = path.join(__dirname, 'data', 'replay-purged.flag');
+    if (!fs.existsSync(replayPurgeFlag)) {
+        try {
+            if (fs.existsSync(replayDir)) {
+                const allFiles = fs.readdirSync(replayDir);
+                allFiles.forEach(f => fs.unlinkSync(path.join(replayDir, f)));
+                log.important(`[Cleanup] One-time purge: deleted ${allFiles.length} replay files`);
+            }
+            const flagDir = path.dirname(replayPurgeFlag);
+            if (!fs.existsSync(flagDir)) fs.mkdirSync(flagDir, { recursive: true });
+            fs.writeFileSync(replayPurgeFlag, new Date().toISOString());
+        } catch (e) {
+            log.warn('[Cleanup] One-time replay purge failed:', e.message);
+        }
+    }
+
+    // Auto-cleanup replays: delete files older than 96 hours, run every 24h
+    const REPLAY_RETENTION_MS = 96 * 60 * 60 * 1000; // 96 hours
+    const cleanupReplays = () => {
+        try {
+            if (!fs.existsSync(replayDir)) return;
+            const now = Date.now();
+            const files = fs.readdirSync(replayDir)
+                .map(f => ({ name: f, mtime: fs.statSync(path.join(replayDir, f)).mtimeMs }));
+            const toDelete = files.filter(f => f.mtime < now - REPLAY_RETENTION_MS);
+            toDelete.forEach(f => fs.unlinkSync(path.join(replayDir, f.name)));
+            if (toDelete.length > 0) log.important(`[Cleanup] Deleted ${toDelete.length} replays older than 96 hours`);
+        } catch (e) {
+            log.warn('[Cleanup] Replay cleanup failed:', e.message);
+        }
+    };
+    cleanupReplays();
+    setInterval(cleanupReplays, 24 * 60 * 60 * 1000);
 });
