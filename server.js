@@ -2246,24 +2246,32 @@ app.post('/api/bot/register', rateLimit({ windowMs: 60_000, max: 10 }), async (r
         saveBotRegistry();
     }
 
-    // Create bot on-chain (BLOCKING — wait for confirmation before responding)
+    // Ensure bot exists on-chain (BLOCKING — wait for confirmation before responding)
     let onChainOk = false;
     if (botRegistryContract) {
+        const botIdBytes32 = ethers.encodeBytes32String(id);
+        // First check if bot already exists on-chain (e.g. created during upload)
         try {
-            const tx = await botRegistryContract.createBot(
-                ethers.encodeBytes32String(id),
-                safeName,
-                ethers.ZeroAddress
-            );
-            await tx.wait(1, 60000);
-            log.important(`[Blockchain] Bot ${id} created on-chain via /register`);
-            onChainOk = true;
-        } catch (err) {
-            // If bot already exists on-chain, that's OK — treat as success
-            if (err.message && (err.message.includes('already exists') || err.message.includes('Bot already'))) {
-                log.important(`[Blockchain] Bot ${id} already exists on-chain, proceeding`);
+            const existing = await botRegistryContract.getBotById(botIdBytes32);
+            if (existing && existing.botId === botIdBytes32) {
+                log.important(`[Blockchain] Bot ${id} already exists on-chain, skipping createBot`);
                 onChainOk = true;
-            } else {
+            }
+        } catch (e) {
+            // getBotById reverted = bot doesn't exist yet, that's fine
+        }
+        // If not on-chain yet, create it
+        if (!onChainOk) {
+            try {
+                const tx = await botRegistryContract.createBot(
+                    botIdBytes32,
+                    safeName,
+                    ethers.ZeroAddress
+                );
+                await tx.wait(1, 60000);
+                log.important(`[Blockchain] Bot ${id} created on-chain via /register`);
+                onChainOk = true;
+            } catch (err) {
                 log.warn('[Blockchain] Failed to create bot on-chain via /register:', err.message);
             }
         }
