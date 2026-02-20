@@ -47,6 +47,7 @@ const REWARD_DISTRIBUTOR_ABI = [
 ];
 
 const SNAKE_BOT_NFT_ABI = [
+    "function mintBotNFT(address _to, bytes32 _botId, string calldata _botName) external returns (uint256)",
     "function tokenURI(uint256 tokenId) external view returns (string memory)",
     "function ownerOf(uint256 tokenId) external view returns (address)",
     "function balanceOf(address owner) external view returns (uint256)",
@@ -171,8 +172,8 @@ const activeWorkers = new Map(); // botId -> Worker instance
 
 // --- Referral System Config ---
 const REFERRAL_DATA_FILE = path.join(__dirname, 'data', 'referrals.json');
-const REFERRAL_RATE_L1 = 0.05; // 5%
-const REFERRAL_RATE_L2 = 0.02; // 2%
+const REFERRAL_POINTS_L1 = 100; // 100 points per direct referral
+const REFERRAL_POINTS_L2 = 50;  // 50 points per L2 referral
 
 // Load referral data
 let referralData = { users: {}, rewards: {} };
@@ -224,59 +225,49 @@ loadPoints();
 // Record referral registration
 function recordReferral(user, inviter, txHash, amount) {
     if (!user || !inviter || user.toLowerCase() === inviter.toLowerCase()) return false;
-    
+
     const userLower = user.toLowerCase();
     const inviterLower = inviter.toLowerCase();
-    
+
     // Check if user already has inviter
     if (referralData.users[userLower]) return false;
-    
-    // Record L1 referral
+
+    // Record L1 referral relationship
     referralData.users[userLower] = {
         inviter: inviterLower,
         registeredAt: Date.now(),
-        txHash: txHash,
-        amount: amount
+        txHash: txHash
     };
-    
-    // Initialize inviter's rewards if not exists
-    if (!referralData.rewards[inviterLower]) {
-        referralData.rewards[inviterLower] = { l1: 0, l2: 0, history: [] };
-    }
-    
-    // Calculate L1 reward
-    const l1Reward = amount * REFERRAL_RATE_L1;
-    referralData.rewards[inviterLower].l1 += l1Reward;
-    referralData.rewards[inviterLower].history.push({
-        type: 'l1',
+
+    // Award L1 referral points to inviter
+    if (!pointsData[inviterLower]) pointsData[inviterLower] = { points: 0, history: [] };
+    pointsData[inviterLower].points += REFERRAL_POINTS_L1;
+    pointsData[inviterLower].history.push({
+        type: 'referral_l1',
         from: userLower,
-        amount: amount,
-        reward: l1Reward,
+        points: REFERRAL_POINTS_L1,
         timestamp: Date.now(),
         txHash: txHash
     });
-    
-    // L2 referral (inviter's inviter)
+
+    // L2 referral (inviter's inviter) — award points
     const l2Inviter = referralData.users[inviterLower]?.inviter;
     if (l2Inviter) {
-        if (!referralData.rewards[l2Inviter]) {
-            referralData.rewards[l2Inviter] = { l1: 0, l2: 0, history: [] };
-        }
-        const l2Reward = amount * REFERRAL_RATE_L2;
-        referralData.rewards[l2Inviter].l2 += l2Reward;
-        referralData.rewards[l2Inviter].history.push({
-            type: 'l2',
+        if (!pointsData[l2Inviter]) pointsData[l2Inviter] = { points: 0, history: [] };
+        pointsData[l2Inviter].points += REFERRAL_POINTS_L2;
+        pointsData[l2Inviter].history.push({
+            type: 'referral_l2',
             from: userLower,
             via: inviterLower,
-            amount: amount,
-            reward: l2Reward,
+            points: REFERRAL_POINTS_L2,
             timestamp: Date.now(),
             txHash: txHash
         });
     }
-    
+
     saveReferralData();
-    log.important(`[Referral] ${userLower} invited by ${inviterLower}, L1: ${l1Reward} ETH`);
+    savePoints();
+    log.important(`[Referral] ${userLower} invited by ${inviterLower}, awarded ${REFERRAL_POINTS_L1} points (L1)`);
     return true;
 }
 
@@ -284,13 +275,21 @@ function recordReferral(user, inviter, txHash, amount) {
 function getReferralStats(address) {
     const addrLower = address.toLowerCase();
     const user = referralData.users[addrLower];
-    const rewards = referralData.rewards[addrLower] || { l1: 0, l2: 0, history: [] };
-    
+    const userPoints = pointsData[addrLower] || { points: 0, history: [] };
+
     // Count invitees
     const invitees = Object.entries(referralData.users)
         .filter(([_, data]) => data.inviter === addrLower)
         .map(([addr, data]) => ({ address: addr, registeredAt: data.registeredAt }));
-    
+
+    // Sum referral points from history
+    const referralPointsL1 = userPoints.history
+        .filter(h => h.type === 'referral_l1')
+        .reduce((sum, h) => sum + (h.points || 0), 0);
+    const referralPointsL2 = userPoints.history
+        .filter(h => h.type === 'referral_l2')
+        .reduce((sum, h) => sum + (h.points || 0), 0);
+
     return {
         hasInviter: !!user,
         inviter: user?.inviter || null,
@@ -298,11 +297,11 @@ function getReferralStats(address) {
         invitees: invitees,
         inviteeCount: invitees.length,
         rewards: {
-            l1: rewards.l1,
-            l2: rewards.l2,
-            total: rewards.l1 + rewards.l2
+            l1Points: referralPointsL1,
+            l2Points: referralPointsL2,
+            totalPoints: referralPointsL1 + referralPointsL2
         },
-        history: rewards.history
+        history: userPoints.history.filter(h => h.type === 'referral_l1' || h.type === 'referral_l2')
     };
 }
 
@@ -1654,7 +1653,7 @@ class GameRoom {
         }
 
         // Record entry price for agent/hero
-        const entryPrice = (botType === 'agent' || botType === 'hero') ? currentEntryFee : 0;
+        const entryPrice = (this.type === 'competitive' && (botType === 'agent' || botType === 'hero')) ? currentEntryFee : 0;
 
         const id = Math.random().toString(36).substr(2, 5);
         this.waitingRoom[id] = {
@@ -2174,7 +2173,8 @@ function leaderboardFromHistory(filterArenaId = null) {
     });
     return Object.entries(counts)
         .map(([name, wins]) => ({ name, wins }))
-        .sort((a,b)=>b.wins-a.wins);
+        .sort((a,b)=>b.wins-a.wins)
+        .slice(0, 30);
 }
 
 app.post('/api/bot/register', rateLimit({ windowMs: 60_000, max: 10 }), (req, res) => {
@@ -2205,7 +2205,7 @@ app.post('/api/bot/register', rateLimit({ windowMs: 60_000, max: 10 }), (req, re
     }
     const safePrice = Number(price || 0);
     const id = createBotId();
-    const regCode = generateRegCode();
+    const newRegCode = generateRegCode();
     botRegistry[id] = {
         id,
         name: safeName,
@@ -2214,7 +2214,7 @@ app.post('/api/bot/register', rateLimit({ windowMs: 60_000, max: 10 }), (req, re
         botType: botType || 'agent',
         credits: 20,
         createdAt: Date.now(),
-        regCode
+        regCode: newRegCode
     };
     saveBotRegistry();
 
@@ -2548,7 +2548,7 @@ app.get('/api/leaderboard/performance', (req, res) => {
         const key = h.winner || 'No Winner';
         counts[key] = (counts[key] || 0) + 1;
     });
-    res.json(Object.entries(counts).map(([name, wins]) => ({ name, wins })).sort((a,b)=>b.wins-a.wins));
+    res.json(Object.entries(counts).map(([name, wins]) => ({ name, wins })).sort((a,b)=>b.wins-a.wins).slice(0, 30));
 });
 
 app.get('/api/leaderboard/competitive', (req, res) => {
@@ -2559,7 +2559,7 @@ app.get('/api/leaderboard/competitive', (req, res) => {
         const key = h.winner || 'No Winner';
         counts[key] = (counts[key] || 0) + 1;
     });
-    res.json(Object.entries(counts).map(([name, wins]) => ({ name, wins })).sort((a,b)=>b.wins-a.wins));
+    res.json(Object.entries(counts).map(([name, wins]) => ({ name, wins })).sort((a,b)=>b.wins-a.wins).slice(0, 30));
 });
 
 app.get('/api/leaderboard/arena/:arenaId', (req, res) => {
@@ -2884,10 +2884,10 @@ app.get('/api/bet/winnings', async (req, res) => {
     }
 });
 
-app.post('/api/bet/place', (req, res) => {
+const handleBetPlace = (req, res) => {
     // bettor is the wallet address, txHash is the transaction hash on Base Sepolia
-    const { matchId, botId, amount, txHash, bettor } = req.body || {};
-    
+    const { matchId, botId, amount, txHash, bettor, arenaType } = req.body || {};
+
     if (!matchId || !botId || !amount) {
         return res.status(400).json({ error: 'Missing required fields: matchId, botId, amount' });
     }
@@ -2908,6 +2908,7 @@ app.post('/api/bet/place', (req, res) => {
         amount: betAmount,
         bettor: bettor || 'anonymous',
         txHash: txHash || null,
+        arenaType: arenaType || null,
         timestamp: Date.now()
     });
 
@@ -2920,24 +2921,31 @@ app.post('/api/bet/place', (req, res) => {
         botId,
         amount: betAmount, // raw USDC units (6 decimals) as passed from frontend
         txHash: txHash || null,
+        arenaType: arenaType || null,
         timestamp: Date.now()
     });
 
-    console.log(`[Bet] New bet on match #${matchId}: ${betAmount} USDC units on ${botId} by ${bettor} (Tx: ${txHash})`);
+    console.log(`[Prediction] New prediction on match #${matchId}: ${betAmount} USDC units on ${botId} by ${bettor} (Tx: ${txHash}, arena: ${arenaType || 'unknown'})`);
 
-    res.json({ 
-        ok: true, 
+    res.json({
+        ok: true,
         total: betPools[matchId].total,
         matchId,
         yourBet: { botId, amount: betAmount }
     });
-});
+};
 
-app.get('/api/bet/status', (req, res) => {
+const handleBetStatus = (req, res) => {
     const matchId = req.query.matchId;
     if (!matchId || !betPools[matchId]) return res.json({ total: 0, bets: [] });
     res.json(betPools[matchId]);
-});
+};
+
+app.post('/api/bet/place', handleBetPlace);
+app.get('/api/bet/status', handleBetStatus);
+// Prediction aliases (same handlers, new naming)
+app.post('/api/prediction/place', handleBetPlace);
+app.get('/api/prediction/status', handleBetStatus);
 
 app.post('/api/bet/claim', (req, res) => {
     res.json({ ok: true });
@@ -3231,62 +3239,10 @@ app.post('/api/referral/my-stats', requireSignatureAuth, (req, res) => {
 
 // Generate claim signature (requires signature auth)
 app.post('/api/referral/claim-proof', requireSignatureAuth, async (req, res) => {
-    try {
-        if (!referralRewardsContract) {
-            return res.status(503).json({ error: 'contracts_not_initialized' });
-        }
-        
-        const address = req.authenticatedAddress;
-        const stats = getReferralStats(address);
-        const totalReward = stats.rewards.total;
-        
-        if (totalReward <= 0) {
-            return res.status(400).json({ error: 'no_rewards', message: 'No rewards to claim' });
-        }
-        
-        // Get current nonce from contract
-        const nonce = await referralRewardsContract.getNonce(address);
-        const amountWei = ethers.parseEther(totalReward.toFixed(18));
-        
-        // Create EIP-712 signature
-        const domain = {
-            name: 'SnakeReferral',
-            version: '1',
-            chainId: 84532,
-            verifyingContract: CONTRACTS.referralRewards
-        };
-        
-        const types = {
-            Claim: [
-                { name: 'user', type: 'address' },
-                { name: 'amount', type: 'uint256' },
-                { name: 'nonce', type: 'uint256' },
-                { name: 'chainId', type: 'uint256' }
-            ]
-        };
-        
-        const value = {
-            user: address,
-            amount: amountWei.toString(),
-            nonce: nonce.toString(),
-            chainId: 84532
-        };
-        
-        // Sign with backend wallet
-        const claimSignature = await backendWallet.signTypedData(domain, types, value);
-        
-        res.json({
-            ok: true,
-            amount: totalReward.toFixed(18),
-            amountWei: amountWei.toString(),
-            nonce: nonce.toString(),
-            signature: claimSignature,
-            contract: CONTRACTS.referralRewards
-        });
-    } catch (e) {
-        log.error('[Referral] claim-proof error:', e.message);
-        res.status(500).json({ error: 'signature_failed', message: e.message });
-    }
+    res.status(410).json({
+        error: 'deprecated',
+        message: 'Cash rewards have been replaced by points. Referral rewards are now awarded as points automatically.'
+    });
 });
 
 // Record referral registration (called by frontend after successful registerBot)
@@ -3370,21 +3326,39 @@ server.listen(PORT, () => {
     initContracts();
     // Resume bots after a short delay (let rooms initialize)
     setTimeout(resumeRunningBots, 3000);
-    // Auto-cleanup replays: keep latest 200, run once at startup then every 24h
+    // One-time purge of all existing replays (runs once, then flag file prevents re-run)
+    const replayDir = path.join(__dirname, 'replays');
+    const replayPurgeFlag = path.join(__dirname, 'data', 'replay-purged.flag');
+    if (!fs.existsSync(replayPurgeFlag)) {
+        try {
+            if (fs.existsSync(replayDir)) {
+                const allFiles = fs.readdirSync(replayDir);
+                allFiles.forEach(f => fs.unlinkSync(path.join(replayDir, f)));
+                log.important(`[Cleanup] One-time purge: deleted ${allFiles.length} replay files`);
+            }
+            const flagDir = path.dirname(replayPurgeFlag);
+            if (!fs.existsSync(flagDir)) fs.mkdirSync(flagDir, { recursive: true });
+            fs.writeFileSync(replayPurgeFlag, new Date().toISOString());
+        } catch (e) {
+            log.warn('[Cleanup] One-time replay purge failed:', e.message);
+        }
+    }
+
+    // Auto-cleanup replays: delete files older than 96 hours, run every 24h
+    const REPLAY_RETENTION_MS = 96 * 60 * 60 * 1000; // 96 hours
     const cleanupReplays = () => {
         try {
-            const replayDir = path.join(__dirname, 'replays');
             if (!fs.existsSync(replayDir)) return;
+            const now = Date.now();
             const files = fs.readdirSync(replayDir)
-                .map(f => ({ name: f, mtime: fs.statSync(path.join(replayDir, f)).mtimeMs }))
-                .sort((a, b) => b.mtime - a.mtime); // 最新的排前面
-            const toDelete = files.slice(200);
+                .map(f => ({ name: f, mtime: fs.statSync(path.join(replayDir, f)).mtimeMs }));
+            const toDelete = files.filter(f => f.mtime < now - REPLAY_RETENTION_MS);
             toDelete.forEach(f => fs.unlinkSync(path.join(replayDir, f.name)));
-            if (toDelete.length > 0) log.important(`[Cleanup] 删除了 ${toDelete.length} 个旧回放，保留最近 ${Math.min(files.length, 200)} 个`);
+            if (toDelete.length > 0) log.important(`[Cleanup] Deleted ${toDelete.length} replays older than 96 hours`);
         } catch (e) {
-            log.warn('[Cleanup] 回放清理失败:', e.message);
+            log.warn('[Cleanup] Replay cleanup failed:', e.message);
         }
     };
     cleanupReplays();
-    setInterval(cleanupReplays, 24 * 60 * 60 * 1000); // 每24小时执行一次
+    setInterval(cleanupReplays, 24 * 60 * 60 * 1000);
 });
