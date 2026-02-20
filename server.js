@@ -411,10 +411,25 @@ function nextMatchId() {
     return id;
 }
 
-// Per-type display counters (reset daily at UTC midnight)
+// Per-type display counters (persisted, reset daily at UTC midnight)
+const COUNTERS_FILE = 'match_counters.json';
 let perfMatchCounter = 1;
 let compMatchCounter = 1;
 let lastResetDate = new Date().toISOString().slice(0, 10);
+if (fs.existsSync(COUNTERS_FILE)) {
+    try {
+        const saved = JSON.parse(fs.readFileSync(COUNTERS_FILE));
+        perfMatchCounter = saved.perfMatchCounter || 1;
+        compMatchCounter = saved.compMatchCounter || 1;
+        lastResetDate = saved.lastResetDate || lastResetDate;
+        log.important(`[Counters] Restored: P${perfMatchCounter}, A${compMatchCounter}, date=${lastResetDate}`);
+    } catch (e) {}
+}
+function saveCounters() {
+    try {
+        fs.writeFileSync(COUNTERS_FILE, JSON.stringify({ perfMatchCounter, compMatchCounter, lastResetDate }));
+    } catch (e) {}
+}
 
 // Epoch counter — days since 2026-02-20 (launch date), starting at 1
 const EPOCH_ORIGIN = new Date('2026-02-20T00:00:00Z');
@@ -429,6 +444,7 @@ const displayIdToMatchId = {};
 
 function getNextDisplayId(type) {
     const displayId = type === 'competitive' ? ('A' + compMatchCounter++) : ('P' + perfMatchCounter++);
+    saveCounters();
     return displayId;
 }
 
@@ -482,6 +498,7 @@ function checkDailyReset() {
         lastResetDate = today;
         perfMatchCounter = 1;
         compMatchCounter = 1;
+        saveCounters();
         for (const [, room] of rooms) {
             if (room.type === 'competitive') {
                 room.paidEntries = {};
