@@ -84,26 +84,33 @@ const CONTRACT_ABI = [
 
 // --- COMPONENTS ---
 
-function Prediction({ matchId }: { matchId: number | null }) {
+function Prediction({ matchId, arenaType }: { matchId: number | null; arenaType: 'performance' | 'competitive' }) {
   const { isConnected, address } = useAccount();
   const [botId, setBotId] = useState('');
+  const [targetMatch, setTargetMatch] = useState('');
   const [amount, setAmount] = useState('0.01');
   const [status, setStatus] = useState('');
-  
+
   const { writeContract, data: hash, error: writeError, isPending } = useWriteContract();
   const { isLoading: isConfirming, isSuccess: isConfirmed } = useWaitForTransactionReceipt({ hash });
 
+  // Sync current matchId into targetMatch when it changes (user can override)
+  useEffect(() => {
+    if (matchId !== null) setTargetMatch(String(matchId));
+  }, [matchId]);
+
   const handlePredict = async () => {
-    if (!matchId && matchId !== 0) return alert('No active match');
-    if (!botId) return alert('Enter Bot ID');
+    const mid = parseInt(targetMatch);
+    if (isNaN(mid)) return alert('Enter a valid Match #');
+    if (!botId) return alert('Enter Bot Name');
     if (!isConnected) return alert('Connect Wallet');
-    
+
     try {
       writeContract({
         address: CONTRACT_ADDRESS,
         abi: CONTRACT_ABI,
         functionName: 'placeBet',
-        args: [BigInt(matchId || 0), botId],
+        args: [BigInt(mid), botId],
         value: parseEther(amount),
       });
     } catch (e: any) {
@@ -115,21 +122,23 @@ function Prediction({ matchId }: { matchId: number | null }) {
     if (isConfirming) setStatus('Confirming...');
     if (isConfirmed && hash) {
       setStatus('Confirmed! notifying server...');
-      fetch('/api/bet/place', {
+      const mid = parseInt(targetMatch);
+      fetch('/api/prediction/place', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ matchId, botId, amount, txHash: hash, bettor: address })
+        body: JSON.stringify({ matchId: mid, botId, amount, txHash: hash, bettor: address, arenaType })
       }).then(res => res.json()).then(data => {
         setStatus(data.ok ? '✅ Prediction Placed' : '⚠️ Server Error');
       }).catch(() => setStatus('⚠️ Network Error'));
     }
     if (writeError) setStatus('Error: ' + writeError.message);
-  }, [isConfirming, isConfirmed, writeError, hash, matchId, botId, amount, address]);
+  }, [isConfirming, isConfirmed, writeError, hash, targetMatch, botId, amount, address, arenaType]);
 
   return (
     <div className="panel-card">
-      <div className="panel-row"><span>Match</span><span>{matchId !== null ? `#${matchId}` : '--'}</span></div>
-      <input placeholder="Bot Name" value={botId} onChange={e => setBotId(e.target.value)} />
+      <div className="panel-row"><span>Current Match</span><span>{matchId !== null ? `#${matchId}` : '--'}</span></div>
+      <input placeholder="Match #" value={targetMatch} onChange={e => setTargetMatch(e.target.value)} type="number" />
+      <input placeholder="Bot Name" value={botId} onChange={e => setBotId(e.target.value)} style={{ marginTop: '6px' }} />
       <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
         {[0.001, 0.01, 0.1].map(val => (
           <button key={val} onClick={() => setAmount(val.toString())} style={{ flex: 1 }}>{val}E</button>
@@ -706,13 +715,15 @@ function App() {
                     <h3>🤖 Bot Management</h3>
                     <BotPanel />
                   </div>
-                  <div className="panel-section">
-                    <h3>🎯 Arena Entry</h3>
-                    <CompetitiveEnter matchNumber={competitiveMatchNumber} />
-                  </div>
+                  {isCompetitive && (
+                    <div className="panel-section">
+                      <h3>🎯 Arena Entry</h3>
+                      <CompetitiveEnter matchNumber={competitiveMatchNumber} />
+                    </div>
+                  )}
                   <div className="panel-section">
                     <h3>🔮 Prediction</h3>
-                    <Prediction matchId={matchId} />
+                    <Prediction matchId={matchId} arenaType={activePage as 'performance' | 'competitive'} />
                   </div>
                 </aside>
 
