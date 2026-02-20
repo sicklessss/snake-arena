@@ -1287,45 +1287,44 @@ class GameRoom {
             placements, // [1st botId, 2nd botId, 3rd botId]
         });
 
-        // Settle match on-chain for betting payouts
-        if (pariMutuelContract && (this.type === 'performance' || this.type === 'competitive') && placements.length > 0) {
+        // Settle bets using points (server-side pari-mutuel)
+        if (placements.length > 0) {
             const matchId = this.currentMatchId;
             const arenaType = this.type;
-            const winnersBytes32 = placements.map(id => {
-                try { return ethers.encodeBytes32String(id.slice(0, 31)); }
-                catch { return ethers.ZeroHash; }
-            }).filter(h => h !== ethers.ZeroHash);
+            const winnerBotId = placements[0]; // 1st place bot name
+            const bets = betRecords[matchId] || [];
+            if (bets.length > 0) {
+                const totalPool = bets.reduce((s, b) => s + b.amount, 0);
+                const winnerBets = bets.filter(b => b.botId === winnerBotId);
+                const winnerPool = winnerBets.reduce((s, b) => s + b.amount, 0);
 
-            if (winnersBytes32.length > 0) {
-                enqueueTx(`settleMatch #${matchId}`, async (overrides) => {
-                    const tx = await pariMutuelContract.settleMatch(matchId, winnersBytes32, overrides);
-                    await tx.wait(1, 120000);
-                    log.important(`[Betting] Match #${matchId} (${arenaType}) settled on-chain. Placements: ${placements.join(', ')}`);
-                    // Award points for competitive arena bets that picked the winner
-                    if (arenaType === 'competitive' && placements.length > 0) {
-                        const winnerBotId = placements[0];
-                        const bets = betRecords[matchId] || [];
-                        let pointsAwarded = 0;
-                        for (const bet of bets) {
-                            if (bet.botId === winnerBotId && bet.bettor && bet.bettor !== 'anonymous') {
-                                const addr = bet.bettor.toLowerCase();
-                                const usdcAmount = Math.floor(Number(bet.amount) / 1e6);
-                                if (usdcAmount > 0) {
-                                    if (!pointsData[addr]) pointsData[addr] = { points: 0, history: [] };
-                                    pointsData[addr].points += usdcAmount;
-                                    pointsData[addr].history.push({
-                                        matchId, amount: usdcAmount, type: 'bet_win', ts: Date.now()
-                                    });
-                                    pointsAwarded += usdcAmount;
-                                }
-                            }
-                        }
-                        if (pointsAwarded > 0) {
-                            savePoints();
-                            log.important(`[Points] Awarded ${pointsAwarded} points for match #${matchId}`);
+                if (winnerPool > 0 && totalPool > 0) {
+                    // Pari-mutuel: winners split the entire pool proportionally
+                    let totalAwarded = 0;
+                    for (const bet of winnerBets) {
+                        if (!bet.bettor || bet.bettor === 'anonymous') continue;
+                        const addr = bet.bettor.toLowerCase();
+                        const winnings = Math.floor(totalPool * (bet.amount / winnerPool));
+                        if (winnings > 0) {
+                            if (!pointsData[addr]) pointsData[addr] = { points: 0, history: [] };
+                            pointsData[addr].points += winnings;
+                            pointsData[addr].history.push({
+                                matchId, amount: winnings, type: 'bet_win', botId: winnerBotId, ts: Date.now()
+                            });
+                            totalAwarded += winnings;
                         }
                     }
-                });
+                    if (totalAwarded > 0) {
+                        savePoints();
+                        log.important(`[Betting] Match #${matchId} (${arenaType}) settled. Winner: ${winnerBotId}. Pool: ${totalPool}, awarded: ${totalAwarded} points to ${winnerBets.length} winner(s)`);
+                    }
+                } else {
+                    // No one bet on the winner — all bets are lost (points already deducted)
+                    log.important(`[Betting] Match #${matchId} (${arenaType}). Winner: ${winnerBotId}. No winning bets. Pool of ${totalPool} points forfeited.`);
+                }
+                // Clean up settled records
+                delete betRecords[matchId];
+                delete betPools[matchId];
             }
         }
     }
@@ -2904,53 +2903,68 @@ app.get('/api/bet/winnings', async (req, res) => {
 });
 
 const handleBetPlace = (req, res) => {
-    // bettor is the wallet address, txHash is the transaction hash on Base Sepolia
-    const { matchId, botId, amount, txHash, bettor, arenaType } = req.body || {};
+    const { matchId, botId, amount, bettor, arenaType } = req.body || {};
 
     if (!matchId || !botId || !amount) {
         return res.status(400).json({ error: 'Missing required fields: matchId, botId, amount' });
     }
+    if (!bettor || bettor === 'anonymous') {
+        return res.status(400).json({ error: 'Please connect wallet to place a bet' });
+    }
+
+    const betAmount = Math.floor(Number(amount));
+    if (isNaN(betAmount) || betAmount <= 0) {
+        return res.status(400).json({ error: 'Invalid amount (must be positive integer)' });
+    }
+
+    // Check if bettor has enough points
+    const addr = bettor.toLowerCase();
+    const userData = pointsData[addr] || { points: 0, history: [] };
+    if (userData.points < betAmount) {
+        return res.status(400).json({ error: `Insufficient points. You have ${userData.points}, need ${betAmount}` });
+    }
+
+    // Deduct points from bettor
+    if (!pointsData[addr]) pointsData[addr] = { points: 0, history: [] };
+    pointsData[addr].points -= betAmount;
+    pointsData[addr].history.push({
+        type: 'bet_place', matchId: Number(matchId), amount: -betAmount, botId, ts: Date.now()
+    });
+    savePoints();
 
     // Initialize pool for this match if not exists
     if (!betPools[matchId]) {
         betPools[matchId] = { total: 0, bets: [] };
     }
 
-    const betAmount = Number(amount);
-    if (isNaN(betAmount) || betAmount <= 0) {
-        return res.status(400).json({ error: 'Invalid amount' });
-    }
-
     // Record the bet
     betPools[matchId].bets.push({
         botId,
         amount: betAmount,
-        bettor: bettor || 'anonymous',
-        txHash: txHash || null,
+        bettor: addr,
         arenaType: arenaType || null,
         timestamp: Date.now()
     });
-
     betPools[matchId].total += betAmount;
 
-    // Also record in betRecords for points system (amount stored in raw units from chain)
+    // Also record in betRecords for settlement
     if (!betRecords[matchId]) betRecords[matchId] = [];
     betRecords[matchId].push({
-        bettor: bettor || 'anonymous',
+        bettor: addr,
         botId,
-        amount: betAmount, // raw USDC units (6 decimals) as passed from frontend
-        txHash: txHash || null,
+        amount: betAmount,
         arenaType: arenaType || null,
         timestamp: Date.now()
     });
 
-    console.log(`[Prediction] New prediction on match #${matchId}: ${betAmount} USDC units on ${botId} by ${bettor} (Tx: ${txHash}, arena: ${arenaType || 'unknown'})`);
+    console.log(`[Prediction] ${addr} bet ${betAmount} points on "${botId}" for match #${matchId} (${arenaType || 'unknown'})`);
 
     res.json({
         ok: true,
         total: betPools[matchId].total,
         matchId,
-        yourBet: { botId, amount: betAmount }
+        yourBet: { botId, amount: betAmount },
+        remainingPoints: pointsData[addr].points
     });
 };
 
