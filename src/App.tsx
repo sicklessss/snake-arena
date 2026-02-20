@@ -219,12 +219,19 @@ function BotManagement() {
             padding: '6px 8px', marginBottom: '4px', borderRadius: '6px',
             background: 'rgba(0,255,136,0.08)', border: '1px solid rgba(0,255,136,0.3)',
           }}>
-            <span style={{ color: 'var(--neon-green)', fontWeight: 'bold', fontSize: '0.85rem' }}>
+            <span style={{ color: 'var(--neon-green)', fontWeight: 'bold', fontSize: '0.85rem', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               🤖 {bot.name}
             </span>
-            <span className="muted" style={{ fontSize: '0.75rem' }}>
-              {bot.unlimited ? '∞' : (bot.credits || 0) + ' credits'}
-            </span>
+            <div style={{ display: 'flex', gap: '4px', marginLeft: '6px', flexShrink: 0 }}>
+              <button type="button" onClick={() => window.open(`/bot/${bot.botId}`, '_blank')}
+                style={{ padding: '2px 6px', fontSize: '0.65rem', background: '#1a1a2e', color: '#aaa', border: '1px solid #333', borderRadius: '4px', cursor: 'pointer' }}>
+                Edit
+              </button>
+              <button type="button" onClick={() => alert('Sell feature coming soon')}
+                style={{ padding: '2px 6px', fontSize: '0.65rem', background: '#1a1a2e', color: 'var(--neon-pink)', border: '1px solid rgba(255,0,128,0.3)', borderRadius: '4px', cursor: 'pointer' }}>
+                Sell
+              </button>
+            </div>
           </div>
         ))}
       </div>
@@ -250,7 +257,7 @@ function BotManagement() {
 }
 
 // Prediction — server-side recording (on-chain PariMutuel disabled: contract reverts)
-function Prediction({ matchId, displayMatchId, arenaType }: { matchId: number | null; displayMatchId: string | null; arenaType: 'performance' | 'competitive' }) {
+function Prediction({ displayMatchId, epoch, arenaType }: { matchId: number | null; displayMatchId: string | null; epoch: number; arenaType: 'performance' | 'competitive' }) {
   const { isConnected, address } = useAccount();
   const { writeContractAsync } = useWriteContract();
   const [botName, setBotName] = useState('');
@@ -261,22 +268,19 @@ function Prediction({ matchId, displayMatchId, arenaType }: { matchId: number | 
 
   useEffect(() => {
     if (displayMatchId) setTargetMatch(displayMatchId);
-    else if (matchId !== null) setTargetMatch(String(matchId));
-  }, [matchId, displayMatchId]);
+  }, [displayMatchId]);
 
   const handlePredict = async () => {
+    const input = targetMatch.trim().toUpperCase();
+    if (!/^[PA]\d+$/.test(input)) return alert('请输入比赛编号，如 P5 或 A3');
     let mid: number;
-    if (/^[PA]\d+$/i.test(targetMatch.trim())) {
-      try {
-        const r = await fetch('/api/match/by-display-id?id=' + encodeURIComponent(targetMatch.trim()));
-        if (!r.ok) return alert('无法找到比赛 ' + targetMatch);
-        const d = await r.json();
-        mid = d.matchId;
-      } catch { return alert('查询比赛编号失败'); }
-    } else {
-      mid = parseInt(targetMatch);
-    }
-    if (isNaN(mid)) return alert('请输入有效的比赛编号 (如 P5, A3)');
+    try {
+      const r = await fetch('/api/match/by-display-id?id=' + encodeURIComponent(input));
+      if (!r.ok) return alert('无法找到比赛 ' + input);
+      const d = await r.json();
+      mid = d.matchId;
+    } catch { return alert('查询比赛编号失败'); }
+    if (isNaN(mid)) return alert('无法解析比赛编号');
     if (!botName) return alert('请输入机器人名称');
     if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) return alert('请输入 USDC 下注金额');
     if (!isConnected || !address) return alert('请先连接钱包');
@@ -328,8 +332,8 @@ function Prediction({ matchId, displayMatchId, arenaType }: { matchId: number | 
 
   return (
     <div className="panel-card">
-      <div className="panel-row"><span>当前比赛</span><span>{displayMatchId ? `${displayMatchId} (#${matchId})` : (matchId !== null ? `#${matchId}` : '--')}</span></div>
-      <input placeholder="比赛场次 (如 P5, A3)" value={targetMatch} onChange={e => setTargetMatch(e.target.value)} />
+      <div className="panel-row"><span>当前比赛</span><span>{displayMatchId ? `Epoch ${epoch} #${displayMatchId}` : '--'}</span></div>
+      <input placeholder="比赛编号 (如 P5, A3)" value={targetMatch} onChange={e => setTargetMatch(e.target.value)} />
       <input placeholder="机器人名称 (预测谁赢?)" value={botName} onChange={e => setBotName(e.target.value)} style={{ marginTop: '6px' }} />
       <input placeholder="下注金额 (USDC)" value={amount} onChange={e => setAmount(e.target.value)} type="number" min="0.01" step="0.01" style={{ marginTop: '6px' }} />
       <div style={{ display: 'flex', gap: '4px', marginTop: '6px' }}>
@@ -822,7 +826,7 @@ function MarketplacePage() {
 function App() {
   const [matchId, setMatchId] = useState<number | null>(null);
   const [displayMatchId, setDisplayMatchId] = useState<string | null>(null);
-  const [, setEpoch] = useState(1);
+  const [epoch, setEpoch] = useState(1);
   const [players, setPlayers] = useState<any[]>([]);
   const [perfLeaderboard, setPerfLeaderboard] = useState<any[]>([]);
   const [compLeaderboard, setCompLeaderboard] = useState<any[]>([]);
@@ -940,7 +944,7 @@ function App() {
                   )}
                   <div className="panel-section">
                     <h3>🔮 Prediction</h3>
-                    <Prediction matchId={matchId} displayMatchId={displayMatchId} arenaType={activePage as 'performance' | 'competitive'} />
+                    <Prediction matchId={matchId} displayMatchId={displayMatchId} epoch={epoch} arenaType={activePage as 'performance' | 'competitive'} />
                   </div>
                 </aside>
 
