@@ -127,13 +127,13 @@ function BotManagement() {
     return () => clearInterval(t);
   }, [address]);
 
-  // Issue 2: Register — first create on server, then call on-chain registerBot
+  // Register: server creates bot on-chain first (blocking), then user calls registerBot
   const handleRegister = async () => {
     if (!isConnected) return alert('Connect Wallet');
     if (!newName) return alert('Enter Bot Name');
 
     try {
-      setRegStatus('Creating bot on server...');
+      setRegStatus('Creating bot (waiting for on-chain confirmation)...');
       const res = await fetch('/api/bot/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -142,6 +142,11 @@ function BotManagement() {
       const data = await res.json();
       if (!res.ok || data.error) {
         setRegStatus('⚠️ ' + (data.message || data.error || 'Failed'));
+        return;
+      }
+
+      if (!data.onChainReady) {
+        setRegStatus('⚠️ On-chain creation failed. Bot created locally but cannot register on-chain yet.');
         return;
       }
 
