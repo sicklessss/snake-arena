@@ -1,0 +1,684 @@
+{
+  "timestamp": "2026-02-20T08:05:59.263Z",
+  "target": "http://107.174.228.72:3000",
+  "suites": [
+    {
+      "suite": "API Endpoints",
+      "total": 54,
+      "pass": 34,
+      "fail": 20,
+      "elapsed": 26409,
+      "results": [
+        {
+          "name": "POST /api/bot/register - create new bot",
+          "suite": "API Endpoints",
+          "status": "pass",
+          "duration": 496,
+          "detail": {
+            "botId": "bot_kljjr0",
+            "name": "TestBot_test_mlulvcsp_oj77fs"
+          }
+        },
+        {
+          "name": "POST /api/bot/register - duplicate name rejected",
+          "suite": "API Endpoints",
+          "status": "pass",
+          "duration": 440,
+          "detail": null
+        },
+        {
+          "name": "GET /api/bot/:botId - get bot by id",
+          "suite": "API Endpoints",
+          "status": "pass",
+          "duration": 220,
+          "detail": null
+        },
+        {
+          "name": "GET /api/bot/:botId - 404 for missing bot",
+          "suite": "API Endpoints",
+          "status": "pass",
+          "duration": 219,
+          "detail": null
+        },
+        {
+          "name": "GET /api/bot/lookup - find by name",
+          "suite": "API Endpoints",
+          "status": "pass",
+          "duration": 219,
+          "detail": null
+        },
+        {
+          "name": "GET /api/bot/lookup - missing name param",
+          "suite": "API Endpoints",
+          "status": "pass",
+          "duration": 218,
+          "detail": null
+        },
+        {
+          "name": "GET /api/bot/lookup - 404 for unknown name",
+          "suite": "API Endpoints",
+          "status": "pass",
+          "duration": 218,
+          "detail": null
+        },
+        {
+          "name": "GET /api/bot/by-name/:name - get full bot",
+          "suite": "API Endpoints",
+          "status": "pass",
+          "duration": 219,
+          "detail": null
+        },
+        {
+          "name": "GET /api/bot/by-name/:name - 404 for unknown",
+          "suite": "API Endpoints",
+          "status": "pass",
+          "duration": 796,
+          "detail": null
+        },
+        {
+          "name": "GET /api/bot/:botId/credits - get credits",
+          "suite": "API Endpoints",
+          "status": "pass",
+          "duration": 222,
+          "detail": null
+        },
+        {
+          "name": "POST /api/bot/register-unlimited - mark unlimited",
+          "suite": "API Endpoints",
+          "status": "fail",
+          "duration": 214,
+          "detail": "HTTP 401: {\"error\":\"unauthorized\"}"
+        },
+        {
+          "name": "POST /api/bot/register-unlimited - missing botId",
+          "suite": "API Endpoints",
+          "status": "fail",
+          "duration": 214,
+          "detail": "expected HTTP 400, got 401: {\"error\":\"unauthorized\"}"
+        },
+        {
+          "name": "POST /api/bot/register-unlimited - unknown bot",
+          "suite": "API Endpoints",
+          "status": "fail",
+          "duration": 214,
+          "detail": "expected HTTP 404, got 401: {\"error\":\"unauthorized\"}"
+        },
+        {
+          "name": "POST /api/bot/upload - upload script for existing bot",
+          "suite": "API Endpoints",
+          "status": "fail",
+          "duration": 217,
+          "detail": "HTTP 401: {\"error\":\"auth_required\",\"message\":\"x-edit-token header required to update existing bot\"}"
+        },
+        {
+          "name": "POST /api/bot/upload - create new bot via upload",
+          "suite": "API Endpoints",
+          "status": "fail",
+          "duration": 10005,
+          "detail": "Timeout after 10000ms"
+        },
+        {
+          "name": "POST /api/bot/upload - security violation rejected",
+          "suite": "API Endpoints",
+          "status": "pass",
+          "duration": 930,
+          "detail": null
+        },
+        {
+          "name": "POST /api/bot/upload - empty body rejected",
+          "suite": "API Endpoints",
+          "status": "pass",
+          "duration": 215,
+          "detail": null
+        },
+        {
+          "name": "POST /api/bot/claim - missing params",
+          "suite": "API Endpoints",
+          "status": "pass",
+          "duration": 213,
+          "detail": null
+        },
+        {
+          "name": "POST /api/bot/claim - 404 unknown bot",
+          "suite": "API Endpoints",
+          "status": "fail",
+          "duration": 454,
+          "detail": "expected HTTP 404, got 400: {\"error\":\"Missing name, address, signature or timestamp\"}"
+        },
+        {
+          "name": "GET /api/bot/user/bots - list by address",
+          "suite": "API Endpoints",
+          "status": "fail",
+          "duration": 210,
+          "detail": "HTTP 404: <!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Error</title>\n</head>\n<body>\n<pre>Cannot GET /api/bot/user/bots</pre>\n</body>\n</html>\n"
+        },
+        {
+          "name": "GET /api/bot/user/bots - missing address",
+          "suite": "API Endpoints",
+          "status": "fail",
+          "duration": 220,
+          "detail": "expected HTTP 400, got 404: <!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Error</title>\n</head>\n<body>\n<pre>Cannot GET /api/bot/user/bots</pre>\n</body>\n</html>\n"
+        },
+        {
+          "name": "GET /api/bot/fee/registration - get fee",
+          "suite": "API Endpoints",
+          "status": "fail",
+          "duration": 343,
+          "detail": "expected 200 or 503, got 404"
+        },
+        {
+          "name": "GET /api/bot/onchain/:botId - on-chain info",
+          "suite": "API Endpoints",
+          "status": "pass",
+          "duration": 315,
+          "detail": null
+        },
+        {
+          "name": "GET /api/bot/nft/:botId - NFT info",
+          "suite": "API Endpoints",
+          "status": "pass",
+          "duration": 296,
+          "detail": null
+        },
+        {
+          "name": "GET /api/bot/rewards/:botId - reward info",
+          "suite": "API Endpoints",
+          "status": "pass",
+          "duration": 410,
+          "detail": null
+        },
+        {
+          "name": "GET /api/arena/status - room status",
+          "suite": "API Endpoints",
+          "status": "pass",
+          "duration": 217,
+          "detail": {
+            "performanceRooms": 1,
+            "competitiveRooms": 1
+          }
+        },
+        {
+          "name": "POST /api/arena/join - join performance",
+          "suite": "API Endpoints",
+          "status": "pass",
+          "duration": 212,
+          "detail": null
+        },
+        {
+          "name": "POST /api/arena/join - 404 for unknown bot",
+          "suite": "API Endpoints",
+          "status": "pass",
+          "duration": 216,
+          "detail": null
+        },
+        {
+          "name": "POST /api/arena/kick - requires admin key",
+          "suite": "API Endpoints",
+          "status": "pass",
+          "duration": 405,
+          "detail": null
+        },
+        {
+          "name": "POST /api/arena/kick - admin key accepted",
+          "suite": "API Endpoints",
+          "status": "pass",
+          "duration": 398,
+          "detail": null
+        },
+        {
+          "name": "GET /api/arena/competitive/status",
+          "suite": "API Endpoints",
+          "status": "pass",
+          "duration": 208,
+          "detail": null
+        },
+        {
+          "name": "GET /api/arena/competitive/registered",
+          "suite": "API Endpoints",
+          "status": "fail",
+          "duration": 622,
+          "detail": "HTTP 404: <!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Error</title>\n</head>\n<body>\n<pre>Cannot GET /api/arena/competitive/registered</pre>\n</body>\n</html>\n"
+        },
+        {
+          "name": "POST /api/arena/competitive/enter - missing params",
+          "suite": "API Endpoints",
+          "status": "fail",
+          "duration": 317,
+          "detail": "expected HTTP 400, got 404: <!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Error</title>\n</head>\n<body>\n<pre>Cannot POST /api/arena/competitive/enter</pre>\n</body>\n</html>\n"
+        },
+        {
+          "name": "POST /api/arena/competitive/enter - unknown bot",
+          "suite": "API Endpoints",
+          "status": "pass",
+          "duration": 214,
+          "detail": null
+        },
+        {
+          "name": "POST /api/arena/competitive/enter - valid entry",
+          "suite": "API Endpoints",
+          "status": "pass",
+          "duration": 214,
+          "detail": "skipped - no competitive room"
+        },
+        {
+          "name": "GET /api/arena/leaderboard/global",
+          "suite": "API Endpoints",
+          "status": "fail",
+          "duration": 208,
+          "detail": "HTTP 404: <!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Error</title>\n</head>\n<body>\n<pre>Cannot GET /api/arena/leaderboard/global</pre>\n</body>\n</html>\n"
+        },
+        {
+          "name": "GET /api/arena/leaderboard/performance",
+          "suite": "API Endpoints",
+          "status": "fail",
+          "duration": 207,
+          "detail": "HTTP 404: <!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Error</title>\n</head>\n<body>\n<pre>Cannot GET /api/arena/leaderboard/performance</pre>\n</body>\n</html>\n"
+        },
+        {
+          "name": "GET /api/arena/leaderboard/competitive",
+          "suite": "API Endpoints",
+          "status": "fail",
+          "duration": 220,
+          "detail": "HTTP 404: <!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Error</title>\n</head>\n<body>\n<pre>Cannot GET /api/arena/leaderboard/competitive</pre>\n</body>\n</html>\n"
+        },
+        {
+          "name": "GET /api/arena/leaderboard/arena/:arenaId",
+          "suite": "API Endpoints",
+          "status": "fail",
+          "duration": 392,
+          "detail": "HTTP 404: <!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Error</title>\n</head>\n<body>\n<pre>Cannot GET /api/arena/leaderboard/arena/performance-1</pre>\n</body>\n</html>\n"
+        },
+        {
+          "name": "GET /api/arena/replays",
+          "suite": "API Endpoints",
+          "status": "fail",
+          "duration": 208,
+          "detail": "HTTP 404: <!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Error</title>\n</head>\n<body>\n<pre>Cannot GET /api/arena/replays</pre>\n</body>\n</html>\n"
+        },
+        {
+          "name": "GET /api/arena/replay/:matchId - 404 for missing",
+          "suite": "API Endpoints",
+          "status": "pass",
+          "duration": 217,
+          "detail": null
+        },
+        {
+          "name": "GET /api/arena/replay/:matchId - valid replay",
+          "suite": "API Endpoints",
+          "status": "fail",
+          "duration": 426,
+          "detail": "HTTP 404: <!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Error</title>\n</head>\n<body>\n<pre>Cannot GET /api/arena/replay/undefined</pre>\n</body>\n</html>\n"
+        },
+        {
+          "name": "POST /api/bet/place - missing params",
+          "suite": "API Endpoints",
+          "status": "pass",
+          "duration": 664,
+          "detail": null
+        },
+        {
+          "name": "POST /api/bet/place - place a bet",
+          "suite": "API Endpoints",
+          "status": "pass",
+          "duration": 215,
+          "detail": null
+        },
+        {
+          "name": "GET /api/bet/status - no matchId returns empty",
+          "suite": "API Endpoints",
+          "status": "pass",
+          "duration": 213,
+          "detail": null
+        },
+        {
+          "name": "GET /api/bet/status - with matchId",
+          "suite": "API Endpoints",
+          "status": "pass",
+          "duration": 211,
+          "detail": null
+        },
+        {
+          "name": "GET /api/referral/info/:address - public info",
+          "suite": "API Endpoints",
+          "status": "pass",
+          "duration": 236,
+          "detail": null
+        },
+        {
+          "name": "POST /api/referral/record - missing params",
+          "suite": "API Endpoints",
+          "status": "pass",
+          "duration": 240,
+          "detail": null
+        },
+        {
+          "name": "POST /api/referral/record - invalid tx",
+          "suite": "API Endpoints",
+          "status": "pass",
+          "duration": 918,
+          "detail": null
+        },
+        {
+          "name": "POST /api/referral/my-stats - requires signature",
+          "suite": "API Endpoints",
+          "status": "fail",
+          "duration": 209,
+          "detail": "should reject without valid signature"
+        },
+        {
+          "name": "GET /api/referral/admin/referral-stats - requires admin key",
+          "suite": "API Endpoints",
+          "status": "fail",
+          "duration": 214,
+          "detail": "should reject without admin key"
+        },
+        {
+          "name": "GET /api/referral/admin/referral-stats - with admin key",
+          "suite": "API Endpoints",
+          "status": "fail",
+          "duration": 216,
+          "detail": "HTTP 404: <!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Error</title>\n</head>\n<body>\n<pre>Cannot GET /api/referral/admin/referral-stats</pre>\n</body>\n</html>\n"
+        },
+        {
+          "name": "GET / - static root serves index",
+          "suite": "API Endpoints",
+          "status": "pass",
+          "duration": 214,
+          "detail": null
+        },
+        {
+          "name": "GET /nonexistent-route - 404 or static fallback",
+          "suite": "API Endpoints",
+          "status": "pass",
+          "duration": 208,
+          "detail": null
+        }
+      ]
+    },
+    {
+      "suite": "WebSocket",
+      "total": 11,
+      "pass": 10,
+      "fail": 1,
+      "elapsed": 23991,
+      "results": [
+        {
+          "name": "Setup: register bot for WS tests",
+          "suite": "WebSocket",
+          "status": "pass",
+          "duration": 210,
+          "detail": {
+            "botId": "bot_fk631q"
+          }
+        },
+        {
+          "name": "Connect to WS without arenaId",
+          "suite": "WebSocket",
+          "status": "pass",
+          "duration": 1438,
+          "detail": null
+        },
+        {
+          "name": "Connect to WS with arenaId query",
+          "suite": "WebSocket",
+          "status": "pass",
+          "duration": 453,
+          "detail": null
+        },
+        {
+          "name": "Send ping, receive pong",
+          "suite": "WebSocket",
+          "status": "fail",
+          "duration": 8445,
+          "detail": "WS message timeout"
+        },
+        {
+          "name": "Send join message",
+          "suite": "WebSocket",
+          "status": "pass",
+          "duration": 3440,
+          "detail": {
+            "messagesReceived": 26
+          }
+        },
+        {
+          "name": "Send move message after join",
+          "suite": "WebSocket",
+          "status": "pass",
+          "duration": 2932,
+          "detail": null
+        },
+        {
+          "name": "Send invalid JSON - connection survives",
+          "suite": "WebSocket",
+          "status": "pass",
+          "duration": 924,
+          "detail": null
+        },
+        {
+          "name": "Send unknown message type - no crash",
+          "suite": "WebSocket",
+          "status": "pass",
+          "duration": 1384,
+          "detail": null
+        },
+        {
+          "name": "Receive game state broadcasts",
+          "suite": "WebSocket",
+          "status": "pass",
+          "duration": 3418,
+          "detail": {
+            "broadcastCount": 25
+          }
+        },
+        {
+          "name": "Multiple concurrent WS connections",
+          "suite": "WebSocket",
+          "status": "pass",
+          "duration": 443,
+          "detail": {
+            "connectionCount": 3
+          }
+        },
+        {
+          "name": "Clean close with code 1000",
+          "suite": "WebSocket",
+          "status": "pass",
+          "duration": 899,
+          "detail": "closed with code 1000"
+        }
+      ]
+    },
+    {
+      "suite": "Blockchain",
+      "total": 22,
+      "pass": 22,
+      "fail": 0,
+      "elapsed": 8254,
+      "results": [
+        {
+          "name": "Setup: connect to Base Sepolia",
+          "suite": "Blockchain",
+          "status": "pass",
+          "duration": 513,
+          "detail": {
+            "chainId": 84532,
+            "rpc": "https://sepolia.base.org"
+          }
+        },
+        {
+          "name": "Wallet has balance",
+          "suite": "Blockchain",
+          "status": "pass",
+          "duration": 300,
+          "detail": {
+            "address": "0xBa379b9AaF5eac6eCF9B532cb6563390De6edfEe",
+            "balanceEth": "25.000857874159247266"
+          }
+        },
+        {
+          "name": "BotRegistry: read registrationFee()",
+          "suite": "Blockchain",
+          "status": "pass",
+          "duration": 289,
+          "detail": {
+            "fee": "0.01"
+          }
+        },
+        {
+          "name": "BotRegistry: getBotById() for random id",
+          "suite": "Blockchain",
+          "status": "pass",
+          "duration": 800,
+          "detail": null
+        },
+        {
+          "name": "BotRegistry: getOwnerBots() for test wallet",
+          "suite": "Blockchain",
+          "status": "pass",
+          "duration": 284,
+          "detail": {
+            "ownedBots": 0
+          }
+        },
+        {
+          "name": "BotRegistry: getBotsForSale(0, 10)",
+          "suite": "Blockchain",
+          "status": "pass",
+          "duration": 301,
+          "detail": {
+            "forSale": 1
+          }
+        },
+        {
+          "name": "BotRegistry: bots() mapping query",
+          "suite": "Blockchain",
+          "status": "pass",
+          "duration": 297,
+          "detail": null
+        },
+        {
+          "name": "RewardDistributor: MIN_CLAIM_THRESHOLD()",
+          "suite": "Blockchain",
+          "status": "pass",
+          "duration": 293,
+          "detail": {
+            "threshold": "0.001"
+          }
+        },
+        {
+          "name": "RewardDistributor: pendingRewards() for random bot",
+          "suite": "Blockchain",
+          "status": "pass",
+          "duration": 288,
+          "detail": null
+        },
+        {
+          "name": "SnakeBotNFT: botToTokenId() for unknown bot",
+          "suite": "Blockchain",
+          "status": "pass",
+          "duration": 753,
+          "detail": null
+        },
+        {
+          "name": "SnakeBotNFT: getBotsByOwner() for test wallet",
+          "suite": "Blockchain",
+          "status": "pass",
+          "duration": 633,
+          "detail": {
+            "nftBots": 0
+          }
+        },
+        {
+          "name": "SnakeBotNFT: tokenIdToBot(0) returns zero",
+          "suite": "Blockchain",
+          "status": "pass",
+          "duration": 296,
+          "detail": {
+            "botId": "0x0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        },
+        {
+          "name": "PariMutuel: matches() for nonexistent match",
+          "suite": "Blockchain",
+          "status": "pass",
+          "duration": 286,
+          "detail": null
+        },
+        {
+          "name": "PariMutuel: getMatchBets() for nonexistent match",
+          "suite": "Blockchain",
+          "status": "pass",
+          "duration": 287,
+          "detail": null
+        },
+        {
+          "name": "PariMutuel: getCurrentOdds() for nonexistent",
+          "suite": "Blockchain",
+          "status": "pass",
+          "duration": 277,
+          "detail": null
+        },
+        {
+          "name": "PariMutuel: botTotalBets() for nonexistent",
+          "suite": "Blockchain",
+          "status": "pass",
+          "duration": 309,
+          "detail": null
+        },
+        {
+          "name": "PariMutuel: getUserPotentialWinnings() for nonexistent",
+          "suite": "Blockchain",
+          "status": "pass",
+          "duration": 286,
+          "detail": null
+        },
+        {
+          "name": "ReferralRewards: getClaimed() for test wallet",
+          "suite": "Blockchain",
+          "status": "pass",
+          "duration": 304,
+          "detail": {
+            "claimed": "0.0"
+          }
+        },
+        {
+          "name": "ReferralRewards: getNonce() for test wallet",
+          "suite": "Blockchain",
+          "status": "pass",
+          "duration": 291,
+          "detail": {
+            "nonce": "0"
+          }
+        },
+        {
+          "name": "ReferralRewards: nonces() mapping",
+          "suite": "Blockchain",
+          "status": "pass",
+          "duration": 286,
+          "detail": null
+        },
+        {
+          "name": "ReferralRewards: claimed() mapping",
+          "suite": "Blockchain",
+          "status": "pass",
+          "duration": 287,
+          "detail": null
+        },
+        {
+          "name": "Server fee matches on-chain registrationFee",
+          "suite": "Blockchain",
+          "status": "pass",
+          "duration": 592,
+          "detail": "skipped - server fee endpoint unavailable"
+        }
+      ]
+    }
+  ],
+  "totals": {
+    "total": 87,
+    "pass": 66,
+    "fail": 21,
+    "elapsed": 58842
+  }
+}
