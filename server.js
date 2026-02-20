@@ -3122,7 +3122,7 @@ app.get('/api/bot/onchain/:botId', async (req, res) => {
 });
 
 // Get user's on-chain bots
-// Uses local botRegistry as source of truth for ownership (bypasses broken ownerBots mapping in contract)
+// Merges local botRegistry ownership with NFT contract ownership
 app.get('/api/user/onchain-bots', async (req, res) => {
     try {
         const { wallet } = req.query;
@@ -3132,18 +3132,44 @@ app.get('/api/user/onchain-bots', async (req, res) => {
 
         const walletLower = wallet.toString().toLowerCase();
 
-        // Find bots in local registry owned by this wallet
-        const localBots = Object.entries(botRegistry)
-            .filter(([, m]) => m.owner && m.owner.toLowerCase() === walletLower);
+        // 1. Find bots in local registry owned by this wallet
+        const localBotMap = new Map();
+        for (const [id, meta] of Object.entries(botRegistry)) {
+            if (meta.owner && meta.owner.toLowerCase() === walletLower) {
+                localBotMap.set(id, meta);
+            }
+        }
 
-        const bots = await Promise.all(localBots.map(async ([id, meta]) => {
+        // 2. Query NFT contract for bots owned by this wallet
+        if (snakeBotNFTContract) {
+            try {
+                const nftBotIds = await snakeBotNFTContract.getBotsByOwner(wallet);
+                for (const botIdBytes32 of nftBotIds) {
+                    const botId = ethers.decodeBytes32String(botIdBytes32).replace(/\0/g, '');
+                    if (botId && !localBotMap.has(botId)) {
+                        // Bot owned via NFT but not in local registry under this wallet
+                        const meta = botRegistry[botId];
+                        if (meta) {
+                            localBotMap.set(botId, meta);
+                        } else {
+                            // NFT-owned bot with no local metadata — include with minimal info
+                            localBotMap.set(botId, { name: botId, owner: wallet });
+                        }
+                    }
+                }
+            } catch (e) {
+                log.warn('[API] NFT getBotsByOwner failed (continuing with local only):', e.message);
+            }
+        }
+
+        // 3. Enrich each bot with on-chain status
+        const bots = await Promise.all([...localBotMap.entries()].map(async ([id, meta]) => {
             let registered = false;
             let salePrice = '0';
             let forSale = false;
             let matchesPlayed = 0;
             let totalEarnings = '0';
 
-            // Try to get on-chain status for this bot
             if (botRegistryContract) {
                 try {
                     const onchain = await botRegistryContract.getBotById(ethers.encodeBytes32String(id));
