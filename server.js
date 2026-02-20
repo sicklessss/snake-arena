@@ -29,6 +29,7 @@ const backendWallet = process.env.BACKEND_PRIVATE_KEY
 // Contract ABIs (simplified)
 const BOT_REGISTRY_ABI = [
     "function createBot(bytes32 _botId, string calldata _botName, address _creator) external",
+    "function registerBot(bytes32 _botId, address _inviter) external payable",
     "function bots(bytes32) external view returns (bytes32 botId, string memory botName, address owner, bool registered, uint256 registeredAt, uint256 matchesPlayed, uint256 totalEarnings, uint256 salePrice)",
     "function getBotById(bytes32 _botId) external view returns (tuple(bytes32 botId, string botName, address owner, bool registered, uint256 registeredAt, uint256 matchesPlayed, uint256 totalEarnings, uint256 salePrice))",
     "function getOwnerBots(address _owner) external view returns (bytes32[] memory)",
@@ -48,9 +49,12 @@ const REWARD_DISTRIBUTOR_ABI = [
 const SNAKE_BOT_NFT_ABI = [
     "function tokenURI(uint256 tokenId) external view returns (string memory)",
     "function ownerOf(uint256 tokenId) external view returns (address)",
+    "function balanceOf(address owner) external view returns (uint256)",
     "function botToTokenId(bytes32) external view returns (uint256)",
     "function tokenIdToBot(uint256) external view returns (bytes32)",
-    "function getBotsByOwner(address _owner) external view returns (bytes32[] memory)"
+    "function getBotsByOwner(address _owner) external view returns (bytes32[] memory)",
+    "function safeTransferFrom(address from, address to, uint256 tokenId) external",
+    "function tokenOfOwnerByIndex(address owner, uint256 index) external view returns (uint256)"
 ];
 
 // Edit token store: token -> { botId, address, expires }
@@ -100,7 +104,7 @@ function initContracts() {
     if (backendWallet && CONTRACTS.botRegistry !== '0x0000000000000000000000000000000000000000') {
         botRegistryContract = new ethers.Contract(CONTRACTS.botRegistry, BOT_REGISTRY_ABI, backendWallet);
         rewardDistributorContract = new ethers.Contract(CONTRACTS.rewardDistributor, REWARD_DISTRIBUTOR_ABI, provider);
-        snakeBotNFTContract = new ethers.Contract(CONTRACTS.snakeBotNFT, SNAKE_BOT_NFT_ABI, provider);
+        snakeBotNFTContract = new ethers.Contract(CONTRACTS.snakeBotNFT, SNAKE_BOT_NFT_ABI, backendWallet);
         referralRewardsContract = new ethers.Contract(CONTRACTS.referralRewards, REFERRAL_REWARDS_ABI, provider);
         pariMutuelContract = new ethers.Contract(CONTRACTS.pariMutuel, PARI_MUTUEL_ABI, backendWallet);
         log.important(`[Blockchain] Contracts initialized. Registry: ${CONTRACTS.botRegistry}, NFT: ${CONTRACTS.snakeBotNFT}, PariMutuel: ${CONTRACTS.pariMutuel}`);
@@ -2201,6 +2205,7 @@ app.post('/api/bot/register', rateLimit({ windowMs: 60_000, max: 10 }), (req, re
     }
     const safePrice = Number(price || 0);
     const id = createBotId();
+    const regCode = generateRegCode();
     botRegistry[id] = {
         id,
         name: safeName,
@@ -2208,13 +2213,28 @@ app.post('/api/bot/register', rateLimit({ windowMs: 60_000, max: 10 }), (req, re
         price: isNaN(safePrice) ? 0 : safePrice,
         botType: botType || 'agent',
         credits: 20,
-        createdAt: Date.now()
+        createdAt: Date.now(),
+        regCode
     };
     saveBotRegistry();
+
+    // Create bot on-chain (non-blocking)
+    if (botRegistryContract) {
+        botRegistryContract.createBot(
+            ethers.encodeBytes32String(id),
+            safeName,
+            ethers.ZeroAddress
+        ).then(tx => tx.wait()).then(() => {
+            log.important(`[Blockchain] Bot ${id} created on-chain via /register`);
+        }).catch(err => {
+            log.warn('[Blockchain] Failed to create bot on-chain via /register:', err.message);
+        });
+    }
 
     // auto-assign room on register (performance by default)
     const room = assignRoomForJoin({ name: botRegistry[id].name, botType: botRegistry[id].botType, botPrice: botRegistry[id].price || 0, arenaType: 'performance' });
     const payload = { ...botRegistry[id] };
+    payload.regCode = regCode;
     if (room) {
         payload.arenaId = room.id;
         payload.wsUrl = 'ws://' + req.headers.host + '?arenaId=' + room.id;
