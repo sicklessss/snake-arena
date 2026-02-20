@@ -419,86 +419,6 @@ function CompetitiveEnter({ displayMatchId }: { displayMatchId: string | null })
   );
 }
 
-// Issue 6: Points display
-function PointsPanel() {
-  const { address } = useAccount();
-  const [points, setPoints] = useState<any>(null);
-
-  useEffect(() => {
-    if (!address) return;
-    const load = async () => {
-      try {
-        const res = await fetch('/api/points/my?address=' + address);
-        if (res.ok) setPoints(await res.json());
-      } catch {}
-    };
-    load();
-    const t = setInterval(load, 15000);
-    return () => clearInterval(t);
-  }, [address]);
-
-  if (!address) return <div className="panel-card muted">Connect wallet to see points</div>;
-  if (!points) return <div className="panel-card muted">Loading...</div>;
-
-  return (
-    <div className="panel-card">
-      <div className="panel-row"><span>Your Points</span><span style={{ color: 'var(--neon-green)', fontWeight: 'bold' }}>{points.points || 0}</span></div>
-      {points.rank && <div className="panel-row"><span>Rank</span><span>#{points.rank}</span></div>}
-      {points.history && points.history.length > 0 && (
-        <div style={{ marginTop: '6px', maxHeight: '100px', overflowY: 'auto' }}>
-          {points.history.slice(0, 5).map((h: any, i: number) => (
-            <div key={i} className="muted" style={{ fontSize: '0.7rem', marginBottom: '2px' }}>
-              +{h.points || h.amount || '?'} — {h.type || 'match'}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// Issue 6: Marketplace
-function Marketplace() {
-  const [listings, setListings] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const load = async () => {
-      try {
-        const res = await fetch('/api/marketplace/listings?offset=0&limit=20');
-        if (res.ok) {
-          const data = await res.json();
-          setListings(data.listings || []);
-        }
-      } catch {}
-      setLoading(false);
-    };
-    load();
-    const t = setInterval(load, 30000);
-    return () => clearInterval(t);
-  }, []);
-
-  return (
-    <div className="panel-card" style={{ maxHeight: '200px', overflowY: 'auto' }}>
-      {loading ? (
-        <div className="muted">Loading marketplace...</div>
-      ) : listings.length === 0 ? (
-        <div className="muted">No bots listed for sale. Owners can list via BotRegistry.listForSale(botId, price).</div>
-      ) : (
-        listings.map((bot, i) => (
-          <div key={i} style={{
-            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-            padding: '4px 0', borderBottom: '1px solid #1b1b2b',
-          }}>
-            <span style={{ fontWeight: 'bold', fontSize: '0.85rem' }}>{bot.botName || bot.botId}</span>
-            <span style={{ color: 'var(--neon-pink)', fontSize: '0.8rem' }}>{bot.price} ETH</span>
-          </div>
-        ))
-      )}
-    </div>
-  );
-}
-
 // Issue 4 & 5: GameCanvas with displayMatchId and epoch
 function GameCanvas({
   mode,
@@ -745,6 +665,161 @@ function GameCanvas({
   );
 }
 
+// Full-page Points view
+function PointsPage() {
+  const { address } = useAccount();
+  const [myPoints, setMyPoints] = useState<any>(null);
+  const [leaderboard, setLeaderboard] = useState<any[]>([]);
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const [myRes, lbRes] = await Promise.all([
+          address ? fetch('/api/points/my?address=' + address) : Promise.resolve(null),
+          fetch('/api/points/leaderboard'),
+        ]);
+        if (myRes && myRes.ok) setMyPoints(await myRes.json());
+        if (lbRes.ok) setLeaderboard(await lbRes.json());
+      } catch {}
+    };
+    load();
+    const t = setInterval(load, 15000);
+    return () => clearInterval(t);
+  }, [address]);
+
+  return (
+    <div style={{ padding: '24px', width: '100%', maxWidth: '800px', margin: '0 auto' }}>
+      <h2 style={{ color: 'var(--neon-green)', textAlign: 'center', marginBottom: '20px' }}>⭐ Points</h2>
+
+      {/* My Points Card */}
+      <div className="panel-section" style={{ marginBottom: '24px' }}>
+        <h3>My Points</h3>
+        {!address ? (
+          <div className="panel-card muted">Connect wallet to see your points</div>
+        ) : !myPoints ? (
+          <div className="panel-card muted">Loading...</div>
+        ) : (
+          <div className="panel-card">
+            <div style={{ display: 'flex', justifyContent: 'space-around', textAlign: 'center', marginBottom: '12px' }}>
+              <div>
+                <div style={{ fontSize: '2rem', fontWeight: 'bold', color: 'var(--neon-green)' }}>{myPoints.points || 0}</div>
+                <div className="muted">Total Points</div>
+              </div>
+              {myPoints.rank && (
+                <div>
+                  <div style={{ fontSize: '2rem', fontWeight: 'bold', color: 'var(--neon-blue)' }}>#{myPoints.rank}</div>
+                  <div className="muted">Rank</div>
+                </div>
+              )}
+            </div>
+            {myPoints.history && myPoints.history.length > 0 && (
+              <>
+                <h4 style={{ color: '#aaa', fontSize: '0.85rem', marginBottom: '6px' }}>Recent Activity</h4>
+                <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
+                  {myPoints.history.slice(0, 20).map((h: any, i: number) => (
+                    <div key={i} style={{
+                      display: 'flex', justifyContent: 'space-between', padding: '4px 8px',
+                      borderBottom: '1px solid #1b1b2b', fontSize: '0.8rem',
+                    }}>
+                      <span className="muted">{h.type || 'match'}</span>
+                      <span style={{ color: 'var(--neon-green)' }}>+{h.points || h.amount || '?'}</span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Points Leaderboard */}
+      <div className="panel-section">
+        <h3>Points Leaderboard</h3>
+        <ul className="fighter-list">
+          {leaderboard.map((p: any, i: number) => (
+            <li key={i} className="fighter-item alive">
+              <span className="fighter-name">
+                {i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i+1}`}{' '}
+                {p.address ? (p.address.slice(0, 6) + '...' + p.address.slice(-4)) : p.name || 'unknown'}
+              </span>
+              <span className="fighter-length" style={{ color: 'var(--neon-green)' }}>{p.points || 0} pts</span>
+            </li>
+          ))}
+          {leaderboard.length === 0 && <li className="fighter-item"><span className="muted">No data yet</span></li>}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
+// Full-page Marketplace view
+function MarketplacePage() {
+  const { isConnected } = useAccount();
+  const [listings, setListings] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const res = await fetch('/api/marketplace/listings?offset=0&limit=50');
+        if (res.ok) {
+          const data = await res.json();
+          setListings(data.listings || []);
+        }
+      } catch {}
+      setLoading(false);
+    };
+    load();
+    const t = setInterval(load, 30000);
+    return () => clearInterval(t);
+  }, []);
+
+  return (
+    <div style={{ padding: '24px', width: '100%', maxWidth: '800px', margin: '0 auto' }}>
+      <h2 style={{ color: 'var(--neon-pink)', textAlign: 'center', marginBottom: '20px' }}>🏪 Bot Marketplace</h2>
+
+      <div className="panel-section">
+        {loading ? (
+          <div className="panel-card muted">Loading marketplace...</div>
+        ) : listings.length === 0 ? (
+          <div className="panel-card">
+            <div className="muted" style={{ textAlign: 'center', padding: '24px 0' }}>
+              <div style={{ fontSize: '2rem', marginBottom: '12px' }}>🏪</div>
+              <p>No bots are currently listed for sale.</p>
+              <p style={{ fontSize: '0.8rem', marginTop: '8px' }}>
+                Bot owners can list their bots via the smart contract:<br/>
+                <code style={{ color: 'var(--neon-blue)' }}>BotRegistry.listForSale(botId, priceInWei)</code>
+              </p>
+            </div>
+          </div>
+        ) : (
+          <div>
+            {listings.map((bot, i) => (
+              <div key={i} className="panel-card" style={{ marginBottom: '8px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div>
+                    <div style={{ fontWeight: 'bold', fontSize: '1rem' }}>{bot.botName || bot.botId}</div>
+                    <div className="muted" style={{ fontSize: '0.75rem' }}>
+                      Owner: {bot.owner ? (bot.owner.slice(0, 6) + '...' + bot.owner.slice(-4)) : 'unknown'}
+                      {bot.matchesPlayed ? ` | ${bot.matchesPlayed} matches` : ''}
+                    </div>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ color: 'var(--neon-pink)', fontWeight: 'bold', fontSize: '1.1rem' }}>{bot.price} ETH</div>
+                    {isConnected && (
+                      <button style={{ fontSize: '0.75rem', padding: '4px 12px', marginTop: '4px' }}>Buy</button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [matchId, setMatchId] = useState<number | null>(null);
   const [displayMatchId, setDisplayMatchId] = useState<string | null>(null);
@@ -752,7 +827,7 @@ function App() {
   const [players, setPlayers] = useState<any[]>([]);
   const [perfLeaderboard, setPerfLeaderboard] = useState<any[]>([]);
   const [compLeaderboard, setCompLeaderboard] = useState<any[]>([]);
-  const [activePage, setActivePage] = useState<'performance' | 'competitive' | 'leaderboard'>('performance');
+  const [activePage, setActivePage] = useState<'performance' | 'competitive' | 'leaderboard' | 'points' | 'marketplace'>('performance');
 
   const playersRef = useRef<any[]>([]);
   const lastPlayersUpdate = useRef(0);
@@ -807,6 +882,8 @@ function App() {
               <button className={`tab ${activePage === 'performance' ? 'active' : ''}`} onClick={() => switchPage('performance')}>🦀 表演场</button>
               <button className={`tab tab-competitive ${activePage === 'competitive' ? 'active' : ''}`} onClick={() => switchPage('competitive')}>⚔️ 竞技场</button>
               <button className={`tab ${activePage === 'leaderboard' ? 'active' : ''}`} onClick={() => switchPage('leaderboard')}>🏆 排行榜</button>
+              <button className={`tab ${activePage === 'points' ? 'active' : ''}`} onClick={() => switchPage('points')}>⭐ 积分</button>
+              <button className={`tab ${activePage === 'marketplace' ? 'active' : ''}`} onClick={() => switchPage('marketplace')}>🏪 市场</button>
               <div style={{ marginLeft: 'auto' }}>
                 <ConnectButton showBalance={false} chainStatus="icon" accountStatus="avatar" />
               </div>
@@ -845,6 +922,10 @@ function App() {
                   </div>
                 </div>
               </div>
+            ) : activePage === 'points' ? (
+              <PointsPage />
+            ) : activePage === 'marketplace' ? (
+              <MarketplacePage />
             ) : (
               <div className={`content`}>
                 <aside className="left-panel">
@@ -861,14 +942,6 @@ function App() {
                   <div className="panel-section">
                     <h3>🔮 Prediction</h3>
                     <Prediction matchId={matchId} displayMatchId={displayMatchId} arenaType={activePage as 'performance' | 'competitive'} />
-                  </div>
-                  <div className="panel-section">
-                    <h3>⭐ Points</h3>
-                    <PointsPanel />
-                  </div>
-                  <div className="panel-section">
-                    <h3>🏪 Marketplace</h3>
-                    <Marketplace />
                   </div>
                 </aside>
 
