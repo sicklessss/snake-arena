@@ -1,14 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { useAccount, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
-import { parseEther, stringToHex, padHex } from 'viem';
+import { parseEther, parseUnits, stringToHex, padHex } from 'viem';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { WagmiProvider } from 'wagmi';
 import { baseSepolia } from 'wagmi/chains';
 import { getDefaultConfig, RainbowKitProvider } from '@rainbow-me/rainbowkit';
 import '@rainbow-me/rainbowkit/styles.css';
 import './index.css';
-import { CONTRACTS, BOT_REGISTRY_ABI } from './contracts';
+import { CONTRACTS, BOT_REGISTRY_ABI, PARI_MUTUEL_ABI, ERC20_ABI } from './contracts';
 
 // --- CONFIG ---
 const config = getDefaultConfig({
@@ -255,6 +255,7 @@ function BotManagement() {
 // Prediction — server-side recording (on-chain PariMutuel disabled: contract reverts)
 function Prediction({ matchId, displayMatchId, arenaType }: { matchId: number | null; displayMatchId: string | null; arenaType: 'performance' | 'competitive' }) {
   const { isConnected, address } = useAccount();
+  const { writeContractAsync } = useWriteContract();
   const [botName, setBotName] = useState('');
   const [targetMatch, setTargetMatch] = useState('');
   const [amount, setAmount] = useState('');
@@ -269,26 +270,49 @@ function Prediction({ matchId, displayMatchId, arenaType }: { matchId: number | 
     const mid = parseInt(targetMatch);
     if (isNaN(mid)) return alert('请输入有效的比赛编号');
     if (!botName) return alert('请输入机器人名称');
-    if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) return alert('请输入下注金额');
-    if (!isConnected) return alert('请先连接钱包');
+    if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) return alert('请输入 USDC 下注金额');
+    if (!isConnected || !address) return alert('请先连接钱包');
 
     setBusy(true);
     try {
-      setStatus('提交预测中...');
-      const res = await fetch('/api/bet/place', {
+      // Convert bot name to bytes32
+      const botIdHex = padHex(stringToHex(botName, { size: 32 }), { size: 32 });
+      // USDC has 6 decimals
+      const usdcAmount = parseUnits(amount, 6);
+
+      // Step 1: Approve USDC
+      setStatus('1/2 授权 USDC...');
+      await writeContractAsync({
+        address: CONTRACTS.usdc as `0x${string}`,
+        abi: ERC20_ABI,
+        functionName: 'approve',
+        args: [CONTRACTS.pariMutuel as `0x${string}`, usdcAmount],
+      });
+      setStatus('1/2 等待授权确认...');
+      // Wait a bit for the approve tx to confirm
+      await new Promise(r => setTimeout(r, 3000));
+
+      // Step 2: Place bet on-chain
+      setStatus('2/2 链上下注...');
+      const betTx = await writeContractAsync({
+        address: CONTRACTS.pariMutuel as `0x${string}`,
+        abi: PARI_MUTUEL_ABI,
+        functionName: 'placeBet',
+        args: [BigInt(mid), botIdHex, usdcAmount],
+      });
+
+      // Record on server too (for leaderboard / tracking)
+      await fetch('/api/bet/place', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ matchId: mid, botId: botName, amount, bettor: address, arenaType })
+        body: JSON.stringify({ matchId: mid, botId: botName, amount, bettor: address, txHash: betTx, arenaType })
       });
-      const data = await res.json();
-      if (data.ok) {
-        setStatus(`✅ 预测成功！下注 ${amount} 积分在 ${botName}。剩余: ${data.remainingPoints} 积分`);
-        setAmount('');
-      } else {
-        setStatus('⚠️ ' + (data.error || 'Error'));
-      }
+
+      setStatus(`✅ 下注成功！${amount} USDC 押 ${botName} 赢`);
+      setAmount('');
     } catch (e: any) {
-      setStatus('错误: ' + (e.message || '网络错误'));
+      const msg = e?.shortMessage || e?.message || '交易失败';
+      setStatus('❌ ' + msg);
     } finally {
       setBusy(false);
     }
@@ -299,11 +323,11 @@ function Prediction({ matchId, displayMatchId, arenaType }: { matchId: number | 
       <div className="panel-row"><span>当前比赛</span><span>{displayMatchId || (matchId !== null ? `#${matchId}` : '--')}</span></div>
       <input placeholder="比赛编号 (全局ID)" value={targetMatch} onChange={e => setTargetMatch(e.target.value)} type="number" />
       <input placeholder="机器人名称 (预测谁赢?)" value={botName} onChange={e => setBotName(e.target.value)} style={{ marginTop: '6px' }} />
-      <input placeholder="下注金额 (积分)" value={amount} onChange={e => setAmount(e.target.value)} type="number" min="1" style={{ marginTop: '6px' }} />
+      <input placeholder="下注金额 (USDC)" value={amount} onChange={e => setAmount(e.target.value)} type="number" min="0.01" step="0.01" style={{ marginTop: '6px' }} />
       <button onClick={handlePredict} disabled={busy} style={{ marginTop: '6px' }}>
-        {busy ? '⏳ 提交中...' : '🔮 下注预测'}
+        {busy ? '⏳ ' + status : '🔮 USDC 下注'}
       </button>
-      <div className="muted" style={{ marginTop: '6px' }}>{status}</div>
+      {!busy && status && <div className="muted" style={{ marginTop: '6px' }}>{status}</div>}
     </div>
   );
 }
