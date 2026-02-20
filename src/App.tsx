@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { useAccount, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
+import { waitForTransactionReceipt } from '@wagmi/core';
 import { parseEther, parseUnits, stringToHex, padHex } from 'viem';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { WagmiProvider } from 'wagmi';
@@ -252,17 +253,16 @@ function BotManagement() {
   );
 }
 
-// Issue 3: Prediction with USDC (1, 5, 10)
+// Prediction with USDC — sequential approve → placeBet using writeContractAsync
 function Prediction({ matchId, displayMatchId, arenaType }: { matchId: number | null; displayMatchId: string | null; arenaType: 'performance' | 'competitive' }) {
   const { isConnected, address } = useAccount();
   const [botName, setBotName] = useState('');
   const [targetMatch, setTargetMatch] = useState('');
   const [amount, setAmount] = useState('1');
   const [status, setStatus] = useState('');
-  const [step, setStep] = useState<'idle' | 'approving' | 'betting'>('idle');
+  const [busy, setBusy] = useState(false);
 
-  const { writeContract, data: hash, error: writeError, isPending } = useWriteContract();
-  const { isLoading: isConfirming, isSuccess: isConfirmed } = useWaitForTransactionReceipt({ hash });
+  const { writeContractAsync } = useWriteContract();
 
   useEffect(() => {
     if (matchId !== null) setTargetMatch(String(matchId));
@@ -276,56 +276,51 @@ function Prediction({ matchId, displayMatchId, arenaType }: { matchId: number | 
     const usdcAmount = parseFloat(amount);
     if (isNaN(usdcAmount) || usdcAmount <= 0) return alert('Enter valid USDC amount');
 
+    const usdcUnits = parseUnits(amount, 6);
+    const botId32 = nameToBytes32(botName);
+
+    setBusy(true);
     try {
-      const usdcUnits = parseUnits(amount, 6);
-      setStep('approving');
-      setStatus('Approving USDC...');
-      writeContract({
+      // Step 1: Approve USDC
+      setStatus('Step 1/2: Approve USDC spending...');
+      const approveHash = await writeContractAsync({
         address: CONTRACTS.usdc as `0x${string}`,
         abi: ERC20_ABI,
         functionName: 'approve',
         args: [CONTRACTS.pariMutuel as `0x${string}`, usdcUnits],
       });
-    } catch (e: any) {
-      setStatus('Error: ' + e.message);
-      setStep('idle');
-    }
-  };
 
-  useEffect(() => {
-    if (isConfirming && step === 'approving') setStatus('Approving USDC...');
-    if (isConfirming && step === 'betting') setStatus('Confirming prediction...');
+      setStatus('Waiting for approval confirmation...');
+      await waitForTransactionReceipt(config, { hash: approveHash });
 
-    if (isConfirmed && hash && step === 'approving') {
-      setStep('betting');
-      setStatus('USDC approved! Placing prediction...');
-      const mid = parseInt(targetMatch);
-      const usdcUnits = parseUnits(amount, 6);
-      const botId32 = nameToBytes32(botName);
-      writeContract({
+      // Step 2: Place bet
+      setStatus('Step 2/2: Placing prediction on-chain...');
+      const betHash = await writeContractAsync({
         address: CONTRACTS.pariMutuel as `0x${string}`,
         abi: PARI_MUTUEL_ABI,
         functionName: 'placeBet',
         args: [BigInt(mid), botId32, usdcUnits],
       });
-    }
 
-    if (isConfirmed && hash && step === 'betting') {
-      setStatus('✅ Confirmed! Notifying server...');
-      const mid = parseInt(targetMatch);
-      const usdcUnits = parseUnits(amount, 6);
-      fetch('/api/prediction/place', {
+      setStatus('Waiting for bet confirmation...');
+      await waitForTransactionReceipt(config, { hash: betHash });
+
+      // Step 3: Notify server
+      setStatus('Notifying server...');
+      const res = await fetch('/api/prediction/place', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ matchId: mid, botId: botName, amount: usdcUnits.toString(), txHash: hash, bettor: address, arenaType })
-      }).then(res => res.json()).then(data => {
-        setStatus(data.ok ? '✅ Prediction Placed!' : '⚠️ Server Error');
-        setStep('idle');
-      }).catch(() => { setStatus('⚠️ Network Error'); setStep('idle'); });
+        body: JSON.stringify({ matchId: mid, botId: botName, amount: usdcUnits.toString(), txHash: betHash, bettor: address, arenaType })
+      });
+      const data = await res.json();
+      setStatus(data.ok ? '✅ Prediction Placed!' : '⚠️ Server: ' + (data.error || 'Error'));
+    } catch (e: any) {
+      const msg = e?.shortMessage || e?.message || 'Unknown error';
+      setStatus('Error: ' + msg);
+    } finally {
+      setBusy(false);
     }
-
-    if (writeError) { setStatus('Error: ' + writeError.message); setStep('idle'); }
-  }, [isConfirming, isConfirmed, writeError, hash, step, targetMatch, botName, amount, address, arenaType, writeContract]);
+  };
 
   return (
     <div className="panel-card">
@@ -341,8 +336,8 @@ function Prediction({ matchId, displayMatchId, arenaType }: { matchId: number | 
         ))}
       </div>
       <input placeholder="Custom USDC Amount" value={amount} onChange={e => setAmount(e.target.value)} style={{ marginTop: '6px' }} />
-      <button onClick={handlePredict} disabled={isPending || isConfirming} style={{ marginTop: '6px' }}>
-        {isPending ? 'Signing...' : isConfirming ? (step === 'approving' ? 'Approving...' : 'Confirming...') : '🔮 Predict (USDC)'}
+      <button onClick={handlePredict} disabled={busy} style={{ marginTop: '6px' }}>
+        {busy ? '⏳ Processing...' : '🔮 Predict (USDC)'}
       </button>
       <div className="muted" style={{ marginTop: '6px' }}>{status}</div>
     </div>
