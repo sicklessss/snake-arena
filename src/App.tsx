@@ -1,26 +1,26 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { useAccount, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
-import { parseEther } from 'viem';
+import { parseEther, parseUnits, stringToHex, padHex } from 'viem';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { WagmiProvider } from 'wagmi';
 import { baseSepolia } from 'wagmi/chains';
 import { getDefaultConfig, RainbowKitProvider } from '@rainbow-me/rainbowkit';
 import '@rainbow-me/rainbowkit/styles.css';
 import './index.css';
+import { CONTRACTS, BOT_REGISTRY_ABI, PARI_MUTUEL_ABI, ERC20_ABI } from './contracts';
 
 // --- CONFIG ---
 const config = getDefaultConfig({
   appName: 'Snake Arena',
-  projectId: '7e5c5e3e3f5e5c5e3f5e5c5e3f5e5c5e', // WalletConnect Cloud project ID
+  projectId: '7e5c5e3e3f5e5c5e3f5e5c5e3f5e5c5e',
   chains: [baseSepolia],
-  ssr: false, 
+  ssr: false,
 });
 
 const queryClient = new QueryClient();
 
-// --- CONTRACT ---
-const CONTRACT_ADDRESS = "0xAf077e41644529AF966EBC9B49849c94cDf80EE2";
+const MAX_BOT_SLOTS = 5;
 
 const PERFORMANCE_RULES = `游戏介绍
 
@@ -69,106 +69,31 @@ const COMPETITIVE_RULES = `⚔️ 竞技场规则
 - 30×30 地图 | 125ms/tick | 食物上限5个
 `;
 
-const CONTRACT_ABI = [
-  {
-    "inputs": [
-      { "internalType": "uint256", "name": "matchId", "type": "uint256" },
-      { "internalType": "string", "name": "botId", "type": "string" }
-    ],
-    "name": "placeBet",
-    "outputs": [],
-    "stateMutability": "payable",
-    "type": "function"
-  }
-] as const;
+// Helper: encode bot name to bytes32
+function nameToBytes32(name: string): `0x${string}` {
+  return padHex(stringToHex(name, { size: 32 }), { size: 32 });
+}
 
 // --- COMPONENTS ---
 
-function Prediction({ matchId, arenaType }: { matchId: number | null; arenaType: 'performance' | 'competitive' }) {
+// Issue 1: Bot Management with 5 slots, scrollable
+function BotManagement() {
   const { isConnected, address } = useAccount();
-  const [botId, setBotId] = useState('');
-  const [targetMatch, setTargetMatch] = useState('');
-  const [amount, setAmount] = useState('0.01');
-  const [status, setStatus] = useState('');
-
-  const { writeContract, data: hash, error: writeError, isPending } = useWriteContract();
-  const { isLoading: isConfirming, isSuccess: isConfirmed } = useWaitForTransactionReceipt({ hash });
-
-  // Sync current matchId into targetMatch when it changes (user can override)
-  useEffect(() => {
-    if (matchId !== null) setTargetMatch(String(matchId));
-  }, [matchId]);
-
-  const handlePredict = async () => {
-    const mid = parseInt(targetMatch);
-    if (isNaN(mid)) return alert('Enter a valid Match #');
-    if (!botId) return alert('Enter Bot Name');
-    if (!isConnected) return alert('Connect Wallet');
-
-    try {
-      writeContract({
-        address: CONTRACT_ADDRESS,
-        abi: CONTRACT_ABI,
-        functionName: 'placeBet',
-        args: [BigInt(mid), botId],
-        value: parseEther(amount),
-      });
-    } catch (e: any) {
-      setStatus('Error: ' + e.message);
-    }
-  };
-
-  useEffect(() => {
-    if (isConfirming) setStatus('Confirming...');
-    if (isConfirmed && hash) {
-      setStatus('Confirmed! notifying server...');
-      const mid = parseInt(targetMatch);
-      fetch('/api/prediction/place', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ matchId: mid, botId, amount, txHash: hash, bettor: address, arenaType })
-      }).then(res => res.json()).then(data => {
-        setStatus(data.ok ? '✅ Prediction Placed' : '⚠️ Server Error');
-      }).catch(() => setStatus('⚠️ Network Error'));
-    }
-    if (writeError) setStatus('Error: ' + writeError.message);
-  }, [isConfirming, isConfirmed, writeError, hash, targetMatch, botId, amount, address, arenaType]);
-
-  return (
-    <div className="panel-card">
-      <div className="panel-row"><span>Current Match</span><span>{matchId !== null ? `#${matchId}` : '--'}</span></div>
-      <input placeholder="Match #" value={targetMatch} onChange={e => setTargetMatch(e.target.value)} type="number" />
-      <input placeholder="Bot Name" value={botId} onChange={e => setBotId(e.target.value)} style={{ marginTop: '6px' }} />
-      <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
-        {[0.001, 0.01, 0.1].map(val => (
-          <button key={val} onClick={() => setAmount(val.toString())} style={{ flex: 1 }}>{val}E</button>
-        ))}
-      </div>
-      <input placeholder="Custom Amount" value={amount} onChange={e => setAmount(e.target.value)} style={{ marginTop: '6px' }} />
-      <button onClick={handlePredict} disabled={isPending || isConfirming} style={{ marginTop: '6px' }}>
-        {isPending ? 'Signing...' : isConfirming ? 'Confirming...' : '🔮 Predict'}
-      </button>
-      <div className="muted" style={{ marginTop: '6px' }}>{status}</div>
-    </div>
-  );
-}
-
-function BotPanel() {
-  const { isConnected } = useAccount();
-  const [name, setName] = useState('');
-  const [copied, setCopied] = useState(false);
+  const [bots, setBots] = useState<any[]>([]);
+  const [newName, setNewName] = useState('');
   const [regStatus, setRegStatus] = useState('');
-  const { writeContract, data: regHash, isPending: regPending } = useWriteContract();
+  const [copied, setCopied] = useState(false);
+
+  const { writeContract, data: regHash, isPending: regPending, error: regError } = useWriteContract();
   const { isLoading: regConfirming, isSuccess: regConfirmed } = useWaitForTransactionReceipt({ hash: regHash });
 
   const guideText = 'read http://107.174.228.72:3000/SNAKE_GUIDE.md';
-  
+
   const handleCopy = () => {
     const doCopy = (text: string) => {
       if (navigator.clipboard && window.isSecureContext) {
         return navigator.clipboard.writeText(text);
       }
-      // Fallback for HTTP
       const textarea = document.createElement('textarea');
       textarea.value = text;
       textarea.style.position = 'fixed';
@@ -185,89 +110,246 @@ function BotPanel() {
     });
   };
 
+  // Fetch user's bots from server
   useEffect(() => {
-    if (regConfirmed && regHash && name) {
-      fetch('/api/bot/register-unlimited', {
+    if (!address) { setBots([]); return; }
+    const fetchBots = async () => {
+      try {
+        const res = await fetch('/api/bot/my-bots?owner=' + address);
+        if (res.ok) {
+          const data = await res.json();
+          setBots(data.bots || []);
+        }
+      } catch {}
+    };
+    fetchBots();
+    const t = setInterval(fetchBots, 10000);
+    return () => clearInterval(t);
+  }, [address]);
+
+  // Issue 2: Register — first create on server, then call on-chain registerBot
+  const handleRegister = async () => {
+    if (!isConnected) return alert('Connect Wallet');
+    if (!newName) return alert('Enter Bot Name');
+
+    try {
+      setRegStatus('Creating bot on server...');
+      const res = await fetch('/api/bot/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ botId: name, txHash: regHash })
-      }).then(r => r.json()).then(d => {
-        setRegStatus(d.ok ? '✅ Registered!' : '⚠️ ' + (d.error || 'Failed'));
-      }).catch(() => setRegStatus('⚠️ Error'));
-    }
-  }, [regConfirmed, regHash, name]);
+        body: JSON.stringify({ name: newName, owner: address, botType: 'agent' })
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        setRegStatus('⚠️ ' + (data.message || data.error || 'Failed'));
+        return;
+      }
 
-  const handleRegister = () => {
-    if (!isConnected) return alert('Connect Wallet');
-    if (!name) return alert('Enter Bot Name first');
-    try {
+      setRegStatus('Sign on-chain registration (0.01 ETH)...');
+      const botId32 = nameToBytes32(data.id);
       writeContract({
-        address: CONTRACT_ADDRESS,
-        abi: CONTRACT_ABI,
-        functionName: 'placeBet',
-        args: [BigInt(0), name],
+        address: CONTRACTS.botRegistry as `0x${string}`,
+        abi: BOT_REGISTRY_ABI,
+        functionName: 'registerBot',
+        args: [botId32, '0x0000000000000000000000000000000000000000' as `0x${string}`],
         value: parseEther('0.01'),
       });
     } catch (e: any) {
       setRegStatus('Error: ' + e.message);
     }
   };
-  
+
+  useEffect(() => {
+    if (regConfirming) setRegStatus('Confirming on-chain...');
+    if (regConfirmed && regHash) {
+      setRegStatus('✅ Registered on-chain! NFT minted.');
+      setNewName('');
+    }
+    if (regError) setRegStatus('⚠️ ' + regError.message);
+  }, [regConfirming, regConfirmed, regHash, regError]);
+
+  const displaySlots = Math.max(3, Math.min(MAX_BOT_SLOTS, bots.length + 1));
+
   return (
-    <div className="panel-card">
-      <div style={{ marginBottom: '6px', color: '#fff', fontSize: '0.85rem' }}>Click to copy instructions to your bot to make a snake bot and fight for you.</div>
-      <div 
-        className="copy-box" 
+    <div className="panel-card" style={{ maxHeight: '320px', overflowY: 'auto' }}>
+      <div style={{ marginBottom: '6px', color: '#fff', fontSize: '0.85rem' }}>
+        Click to copy instructions for your AI bot:
+      </div>
+      <div
+        className="copy-box"
         onClick={handleCopy}
         role="button"
         tabIndex={0}
         onKeyDown={e => e.key === 'Enter' && handleCopy()}
-        style={{ 
-          cursor: 'pointer', 
-          padding: '10px 12px', 
-          background: '#0d0d20', 
-          border: '1px solid var(--neon-blue)', 
-          borderRadius: '6px',
-          fontFamily: 'monospace',
-          fontSize: '0.9rem',
-          color: 'var(--neon-green)',
-          position: 'relative',
-          userSelect: 'all',
-          transition: 'border-color 0.2s, background 0.2s',
-          wordBreak: 'break-all' as const,
-          lineHeight: '1.4',
+        style={{
+          cursor: 'pointer', padding: '10px 12px', background: '#0d0d20',
+          border: '1px solid var(--neon-blue)', borderRadius: '6px',
+          fontFamily: 'monospace', fontSize: '0.9rem', color: 'var(--neon-green)',
+          position: 'relative', userSelect: 'all',
+          wordBreak: 'break-all' as const, lineHeight: '1.4',
         }}
       >
         📋 {guideText}
         {copied && (
-          <span style={{ 
+          <span style={{
             position: 'absolute', right: 8, top: '-28px',
             background: 'var(--neon-green)', color: '#000', padding: '3px 10px', borderRadius: '4px',
             fontSize: '0.75rem', fontWeight: 'bold', pointerEvents: 'none',
-            boxShadow: '0 2px 8px rgba(0,255,136,0.4)',
-            zIndex: 10,
+            boxShadow: '0 2px 8px rgba(0,255,136,0.4)', zIndex: 10,
           }}>✅ Copied!</span>
         )}
       </div>
-      <div style={{ display: 'flex', gap: '6px', marginTop: '8px', alignItems: 'center' }}>
-        <input placeholder="Bot Name / ID" value={name} onChange={e => setName(e.target.value)} style={{ flex: 1 }} />
-        <button 
-          onClick={handleRegister} 
-          disabled={regPending || regConfirming}
-          style={{ 
-            width: 'auto', padding: '8px 12px', margin: 0,
-            background: 'var(--neon-pink)', fontSize: '0.75rem', whiteSpace: 'nowrap'
-          }}
-        >
-          {regPending ? '...' : regConfirming ? '⏳' : '💎 Register 0.01E'}
-        </button>
+
+      {/* Bot Slots */}
+      <div style={{ marginTop: '10px' }}>
+        {Array.from({ length: displaySlots }).map((_, i) => {
+          const bot = bots[i];
+          if (bot) {
+            return (
+              <div key={i} style={{
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                padding: '6px 8px', marginBottom: '4px', borderRadius: '6px',
+                background: 'rgba(0,255,136,0.08)', border: '1px solid rgba(0,255,136,0.3)',
+              }}>
+                <span style={{ color: 'var(--neon-green)', fontWeight: 'bold', fontSize: '0.85rem' }}>
+                  🤖 {bot.name}
+                </span>
+                <span className="muted" style={{ fontSize: '0.75rem' }}>
+                  {bot.unlimited ? '∞' : (bot.credits || 0) + ' credits'}
+                </span>
+              </div>
+            );
+          }
+          return (
+            <div key={i} style={{
+              padding: '6px 8px', marginBottom: '4px', borderRadius: '6px',
+              background: 'rgba(255,255,255,0.03)', border: '1px dashed #2a2a3a',
+              color: '#555', fontSize: '0.8rem', textAlign: 'center',
+            }}>
+              Empty Slot {i + 1}/{MAX_BOT_SLOTS}
+            </div>
+          );
+        })}
       </div>
+
+      {bots.length < MAX_BOT_SLOTS && (
+        <div style={{ display: 'flex', gap: '6px', marginTop: '8px', alignItems: 'center' }}>
+          <input placeholder="Bot Name" value={newName} onChange={e => setNewName(e.target.value)} style={{ flex: 1 }} />
+          <button
+            onClick={handleRegister}
+            disabled={regPending || regConfirming}
+            style={{
+              width: 'auto', padding: '8px 12px', margin: 0,
+              background: 'var(--neon-pink)', fontSize: '0.75rem', whiteSpace: 'nowrap'
+            }}
+          >
+            {regPending ? '...' : regConfirming ? '⏳' : '💎 Register 0.01E'}
+          </button>
+        </div>
+      )}
       {regStatus && <div className="muted" style={{ marginTop: '4px' }}>{regStatus}</div>}
     </div>
   );
 }
 
-function CompetitiveEnter({ matchNumber }: { matchNumber: number }) {
+// Issue 3: Prediction with USDC (1, 5, 10)
+function Prediction({ matchId, displayMatchId, arenaType }: { matchId: number | null; displayMatchId: string | null; arenaType: 'performance' | 'competitive' }) {
+  const { isConnected, address } = useAccount();
+  const [botName, setBotName] = useState('');
+  const [targetMatch, setTargetMatch] = useState('');
+  const [amount, setAmount] = useState('1');
+  const [status, setStatus] = useState('');
+  const [step, setStep] = useState<'idle' | 'approving' | 'betting'>('idle');
+
+  const { writeContract, data: hash, error: writeError, isPending } = useWriteContract();
+  const { isLoading: isConfirming, isSuccess: isConfirmed } = useWaitForTransactionReceipt({ hash });
+
+  useEffect(() => {
+    if (matchId !== null) setTargetMatch(String(matchId));
+  }, [matchId]);
+
+  const handlePredict = async () => {
+    const mid = parseInt(targetMatch);
+    if (isNaN(mid)) return alert('Enter a valid Match #');
+    if (!botName) return alert('Enter Bot Name');
+    if (!isConnected) return alert('Connect Wallet');
+    const usdcAmount = parseFloat(amount);
+    if (isNaN(usdcAmount) || usdcAmount <= 0) return alert('Enter valid USDC amount');
+
+    try {
+      const usdcUnits = parseUnits(amount, 6);
+      setStep('approving');
+      setStatus('Approving USDC...');
+      writeContract({
+        address: CONTRACTS.usdc as `0x${string}`,
+        abi: ERC20_ABI,
+        functionName: 'approve',
+        args: [CONTRACTS.pariMutuel as `0x${string}`, usdcUnits],
+      });
+    } catch (e: any) {
+      setStatus('Error: ' + e.message);
+      setStep('idle');
+    }
+  };
+
+  useEffect(() => {
+    if (isConfirming && step === 'approving') setStatus('Approving USDC...');
+    if (isConfirming && step === 'betting') setStatus('Confirming prediction...');
+
+    if (isConfirmed && hash && step === 'approving') {
+      setStep('betting');
+      setStatus('USDC approved! Placing prediction...');
+      const mid = parseInt(targetMatch);
+      const usdcUnits = parseUnits(amount, 6);
+      const botId32 = nameToBytes32(botName);
+      writeContract({
+        address: CONTRACTS.pariMutuel as `0x${string}`,
+        abi: PARI_MUTUEL_ABI,
+        functionName: 'placeBet',
+        args: [BigInt(mid), botId32, usdcUnits],
+      });
+    }
+
+    if (isConfirmed && hash && step === 'betting') {
+      setStatus('✅ Confirmed! Notifying server...');
+      const mid = parseInt(targetMatch);
+      const usdcUnits = parseUnits(amount, 6);
+      fetch('/api/prediction/place', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ matchId: mid, botId: botName, amount: usdcUnits.toString(), txHash: hash, bettor: address, arenaType })
+      }).then(res => res.json()).then(data => {
+        setStatus(data.ok ? '✅ Prediction Placed!' : '⚠️ Server Error');
+        setStep('idle');
+      }).catch(() => { setStatus('⚠️ Network Error'); setStep('idle'); });
+    }
+
+    if (writeError) { setStatus('Error: ' + writeError.message); setStep('idle'); }
+  }, [isConfirming, isConfirmed, writeError, hash, step, targetMatch, botName, amount, address, arenaType, writeContract]);
+
+  return (
+    <div className="panel-card">
+      <div className="panel-row"><span>Current Match</span><span>{displayMatchId || (matchId !== null ? `#${matchId}` : '--')}</span></div>
+      <input placeholder="Match # (global ID)" value={targetMatch} onChange={e => setTargetMatch(e.target.value)} type="number" />
+      <input placeholder="Bot Name" value={botName} onChange={e => setBotName(e.target.value)} style={{ marginTop: '6px' }} />
+      <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
+        {[1, 5, 10].map(val => (
+          <button key={val} onClick={() => setAmount(val.toString())}
+            style={{ flex: 1, background: amount === val.toString() ? 'var(--neon-green)' : undefined, color: amount === val.toString() ? '#000' : undefined }}>
+            {val} USDC
+          </button>
+        ))}
+      </div>
+      <input placeholder="Custom USDC Amount" value={amount} onChange={e => setAmount(e.target.value)} style={{ marginTop: '6px' }} />
+      <button onClick={handlePredict} disabled={isPending || isConfirming} style={{ marginTop: '6px' }}>
+        {isPending ? 'Signing...' : isConfirming ? (step === 'approving' ? 'Approving...' : 'Confirming...') : '🔮 Predict (USDC)'}
+      </button>
+      <div className="muted" style={{ marginTop: '6px' }}>{status}</div>
+    </div>
+  );
+}
+
+function CompetitiveEnter({ displayMatchId }: { displayMatchId: string | null }) {
   const { isConnected } = useAccount();
   const [botName, setBotName] = useState('');
   const [targetMatch, setTargetMatch] = useState('');
@@ -282,9 +364,9 @@ function CompetitiveEnter({ matchNumber }: { matchNumber: number }) {
       fetch('/api/competitive/enter', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ botId: resolvedBotId, matchNumber: parseInt(targetMatch), txHash: hash })
+        body: JSON.stringify({ botId: resolvedBotId, displayMatchId: targetMatch, txHash: hash })
       }).then(r => r.json()).then(data => {
-        setStatus(data.ok ? '✅ Entry confirmed for match #' + targetMatch : '⚠️ ' + (data.error || 'Failed'));
+        setStatus(data.ok ? '✅ Entry confirmed for match ' + targetMatch : '⚠️ ' + (data.error || data.message || 'Failed'));
       }).catch(() => setStatus('⚠️ Network Error'));
     }
   }, [isConfirmed, hash, resolvedBotId, targetMatch]);
@@ -292,10 +374,8 @@ function CompetitiveEnter({ matchNumber }: { matchNumber: number }) {
   const handleEnter = async () => {
     if (!isConnected) return alert('Connect Wallet');
     if (!botName) return alert('Enter Bot Name');
-    const mn = parseInt(targetMatch);
-    if (isNaN(mn) || mn < matchNumber) return alert('Match number must be >= current match #' + matchNumber);
-    
-    // Lookup botId by name
+    if (!targetMatch) return alert('Enter target match (e.g. A3)');
+
     try {
       setStatus('Looking up bot...');
       const res = await fetch('/api/bot/lookup?name=' + encodeURIComponent(botName));
@@ -306,12 +386,13 @@ function CompetitiveEnter({ matchNumber }: { matchNumber: number }) {
       }
       const data = await res.json();
       setResolvedBotId(data.botId);
-      
+
+      const botId32 = nameToBytes32(data.botId);
       writeContract({
-        address: CONTRACT_ADDRESS,
-        abi: CONTRACT_ABI,
-        functionName: 'placeBet',
-        args: [BigInt(0), data.botId],
+        address: CONTRACTS.botRegistry as `0x${string}`,
+        abi: BOT_REGISTRY_ABI,
+        functionName: 'registerBot',
+        args: [botId32, '0x0000000000000000000000000000000000000000' as `0x${string}`],
         value: parseEther('0.001'),
       });
     } catch (e: any) {
@@ -321,14 +402,13 @@ function CompetitiveEnter({ matchNumber }: { matchNumber: number }) {
 
   return (
     <div className="panel-card">
-      <div className="panel-row"><span>Current Match</span><span>#{matchNumber}</span></div>
+      <div className="panel-row"><span>Current Match</span><span>{displayMatchId || '--'}</span></div>
       <input placeholder="Bot Name" value={botName} onChange={e => setBotName(e.target.value)} />
-      <input 
-        placeholder={`Target Match # (>= ${matchNumber})`}
-        value={targetMatch} 
-        onChange={e => setTargetMatch(e.target.value)} 
+      <input
+        placeholder={`Target Match (e.g. A${displayMatchId ? parseInt(displayMatchId.replace(/\D/g, '')) + 1 : '?'})`}
+        value={targetMatch}
+        onChange={e => setTargetMatch(e.target.value)}
         style={{ marginTop: '6px' }}
-        type="number"
       />
       <div className="muted" style={{ marginTop: '4px' }}>Cost: 0.001 ETH per entry</div>
       <button onClick={handleEnter} disabled={isPending || isConfirming} style={{ marginTop: '6px' }}>
@@ -339,16 +419,99 @@ function CompetitiveEnter({ matchNumber }: { matchNumber: number }) {
   );
 }
 
-function GameCanvas({ 
-  mode, 
-  setMatchId, 
-  setPlayers, 
-  setMatchNumber 
-}: { 
+// Issue 6: Points display
+function PointsPanel() {
+  const { address } = useAccount();
+  const [points, setPoints] = useState<any>(null);
+
+  useEffect(() => {
+    if (!address) return;
+    const load = async () => {
+      try {
+        const res = await fetch('/api/points/my?address=' + address);
+        if (res.ok) setPoints(await res.json());
+      } catch {}
+    };
+    load();
+    const t = setInterval(load, 15000);
+    return () => clearInterval(t);
+  }, [address]);
+
+  if (!address) return <div className="panel-card muted">Connect wallet to see points</div>;
+  if (!points) return <div className="panel-card muted">Loading...</div>;
+
+  return (
+    <div className="panel-card">
+      <div className="panel-row"><span>Your Points</span><span style={{ color: 'var(--neon-green)', fontWeight: 'bold' }}>{points.points || 0}</span></div>
+      {points.rank && <div className="panel-row"><span>Rank</span><span>#{points.rank}</span></div>}
+      {points.history && points.history.length > 0 && (
+        <div style={{ marginTop: '6px', maxHeight: '100px', overflowY: 'auto' }}>
+          {points.history.slice(0, 5).map((h: any, i: number) => (
+            <div key={i} className="muted" style={{ fontSize: '0.7rem', marginBottom: '2px' }}>
+              +{h.points || h.amount || '?'} — {h.type || 'match'}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Issue 6: Marketplace
+function Marketplace() {
+  const [listings, setListings] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const res = await fetch('/api/marketplace/listings?offset=0&limit=20');
+        if (res.ok) {
+          const data = await res.json();
+          setListings(data.listings || []);
+        }
+      } catch {}
+      setLoading(false);
+    };
+    load();
+    const t = setInterval(load, 30000);
+    return () => clearInterval(t);
+  }, []);
+
+  return (
+    <div className="panel-card" style={{ maxHeight: '200px', overflowY: 'auto' }}>
+      {loading ? (
+        <div className="muted">Loading marketplace...</div>
+      ) : listings.length === 0 ? (
+        <div className="muted">No bots listed for sale. Owners can list via BotRegistry.listForSale(botId, price).</div>
+      ) : (
+        listings.map((bot, i) => (
+          <div key={i} style={{
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            padding: '4px 0', borderBottom: '1px solid #1b1b2b',
+          }}>
+            <span style={{ fontWeight: 'bold', fontSize: '0.85rem' }}>{bot.botName || bot.botId}</span>
+            <span style={{ color: 'var(--neon-pink)', fontSize: '0.8rem' }}>{bot.price} ETH</span>
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
+// Issue 4 & 5: GameCanvas with displayMatchId and epoch
+function GameCanvas({
+  mode,
+  setMatchId,
+  setPlayers,
+  setDisplayMatchId,
+  setEpoch,
+}: {
   mode: 'performance' | 'competitive';
   setMatchId: (id: number | null) => void;
   setPlayers: (players: any[]) => void;
-  setMatchNumber?: (n: number) => void;
+  setDisplayMatchId: (id: string | null) => void;
+  setEpoch: (n: number) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [status, setStatus] = useState('Connecting...');
@@ -361,7 +524,6 @@ function GameCanvas({
 
   const isCompetitive = mode === 'competitive';
 
-  // Fetch room count for performance mode
   useEffect(() => {
     if (isCompetitive) return;
     const fetchRooms = async () => {
@@ -379,10 +541,10 @@ function GameCanvas({
   useEffect(() => {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const arenaId = isCompetitive ? 'competitive-1' : `performance-${selectedRoom}`;
-    const wsUrl = `${proto}://${window.location.host}?arenaId=${arenaId}`; 
-    
+    const wsUrl = `${proto}://${window.location.host}?arenaId=${arenaId}`;
+
     let ws: WebSocket;
-    
+
     const connect = () => {
         ws = new WebSocket(wsUrl);
         ws.onopen = () => setStatus('Connected!');
@@ -397,15 +559,18 @@ function GameCanvas({
 
     const render = (state: any) => {
         setMatchId(state.matchId);
-        if (state.matchNumber && setMatchNumber) {
-          setMatchNumber(state.matchNumber);
-        }
-        setMatchInfo((isCompetitive ? '⚔️ COMPETITIVE ' : '') + 'MATCH #' + (state.matchId || '?'));
+        setDisplayMatchId(state.displayMatchId || null);
+        if (state.epoch) setEpoch(state.epoch);
+
+        // Issue 5: Show "Epoch X #displayMatchId"
+        const epochStr = state.epoch ? `Epoch ${state.epoch}` : '';
+        const matchStr = state.displayMatchId || `#${state.matchId || '?'}`;
+        setMatchInfo(`${isCompetitive ? '⚔️ ' : ''}${epochStr} ${matchStr}`);
+
         const alivePlayers = state.players || [];
         const waitingPlayers = (state.waitingPlayers || []).map((p: any) => ({ ...p, waiting: true }));
         setPlayers([...alivePlayers, ...waitingPlayers]);
 
-        // Timer
         if (state.gameState === 'PLAYING') {
             const min = Math.floor(state.matchTimeLeft/60);
             const sec = state.matchTimeLeft%60;
@@ -431,19 +596,16 @@ function GameCanvas({
             </>);
         }
 
-        // Canvas
         const canvas = canvasRef.current;
         if (!canvas) return;
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
-        
+
         const cellSize = canvas.width / 30;
 
-        // Clear
         ctx.fillStyle = '#000';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
-        
-        // Grid - slightly different color for competitive
+
         ctx.strokeStyle = isCompetitive ? '#1a1020' : '#1a1a2e';
         ctx.lineWidth = 0.5;
         for (let i = 0; i <= 30; i++) {
@@ -451,17 +613,14 @@ function GameCanvas({
             ctx.beginPath(); ctx.moveTo(0, i*cellSize); ctx.lineTo(canvas.width, i*cellSize); ctx.stroke();
         }
 
-        // Obstacles (competitive mode)
         if (state.obstacles && state.obstacles.length > 0) {
             for (const obs of state.obstacles) {
                 if (obs.solid) {
-                    // Solid obstacle - dark red
                     ctx.fillStyle = '#8b0000';
                     ctx.shadowColor = '#ff0000';
                     ctx.shadowBlur = 4;
                     ctx.fillRect(obs.x * cellSize, obs.y * cellSize, cellSize, cellSize);
                     ctx.shadowBlur = 0;
-                    // Draw X pattern
                     ctx.strokeStyle = '#ff4444';
                     ctx.lineWidth = 1;
                     ctx.beginPath();
@@ -471,7 +630,6 @@ function GameCanvas({
                     ctx.lineTo(obs.x * cellSize + 2, (obs.y + 1) * cellSize - 2);
                     ctx.stroke();
                 } else {
-                    // Blinking obstacle - yellow flashing
                     const blink = Math.floor(Date.now() / 200) % 2 === 0;
                     if (blink) {
                         ctx.fillStyle = 'rgba(255, 200, 0, 0.6)';
@@ -483,7 +641,6 @@ function GameCanvas({
                         ctx.fillStyle = 'rgba(255, 200, 0, 0.2)';
                         ctx.fillRect(obs.x * cellSize, obs.y * cellSize, cellSize, cellSize);
                     }
-                    // Warning border
                     ctx.strokeStyle = 'rgba(255, 200, 0, 0.8)';
                     ctx.lineWidth = 1;
                     ctx.strokeRect(obs.x * cellSize, obs.y * cellSize, cellSize, cellSize);
@@ -491,7 +648,6 @@ function GameCanvas({
             }
         }
 
-        // Food
         ctx.fillStyle = '#ff0055';
         ctx.shadowColor = '#ff0055'; ctx.shadowBlur = 10;
         state.food.forEach((f: any) => {
@@ -499,10 +655,9 @@ function GameCanvas({
         });
         ctx.shadowBlur = 0;
 
-        // Players
         (state.players || []).forEach((p: any) => {
             if (!p.body || p.body.length === 0) return;
-            
+
             const isBlinking = !p.alive && p.blinking;
             if (isBlinking && Math.floor(Date.now() / 500) % 2 === 0) return;
 
@@ -511,12 +666,10 @@ function GameCanvas({
             ctx.shadowBlur = p.alive ? 8 : 0;
             ctx.globalAlpha = p.alive ? 1 : 0.4;
 
-            // Body with name letters (show name only once, not repeating)
             const pName = p.name || '';
             p.body.forEach((seg: any, i: number) => {
-                if (i === 0) return; 
+                if (i === 0) return;
                 ctx.fillRect(seg.x * cellSize + 1, seg.y * cellSize + 1, cellSize - 2, cellSize - 2);
-                // Draw letter on body segment — only for the first occurrence of the name
                 const letterIdx = i - 1;
                 if (letterIdx < pName.length && pName[letterIdx]) {
                     ctx.save();
@@ -528,7 +681,6 @@ function GameCanvas({
                     ctx.textBaseline = 'middle';
                     ctx.fillText(pName[letterIdx], seg.x * cellSize + cellSize/2, seg.y * cellSize + cellSize/2 + 1);
                     ctx.restore();
-                    // Restore player color for next segment
                     ctx.fillStyle = p.color || '#00ff88';
                     ctx.shadowColor = p.color || '#00ff88';
                     ctx.shadowBlur = p.alive ? 8 : 0;
@@ -536,7 +688,6 @@ function GameCanvas({
                 }
             });
 
-            // Head (triangle)
             const head = p.body[0];
             const dir = p.direction || {x:1, y:0};
             const cx = head.x * cellSize + cellSize/2;
@@ -544,23 +695,10 @@ function GameCanvas({
             const size = cellSize/2 - 1;
 
             ctx.beginPath();
-            if (dir.x === 1) {
-                ctx.moveTo(cx + size, cy);
-                ctx.lineTo(cx - size, cy - size);
-                ctx.lineTo(cx - size, cy + size);
-            } else if (dir.x === -1) {
-                ctx.moveTo(cx - size, cy);
-                ctx.lineTo(cx + size, cy - size);
-                ctx.lineTo(cx + size, cy + size);
-            } else if (dir.y === -1) {
-                ctx.moveTo(cx, cy - size);
-                ctx.lineTo(cx - size, cy + size);
-                ctx.lineTo(cx + size, cy + size);
-            } else {
-                ctx.moveTo(cx, cy + size);
-                ctx.lineTo(cx - size, cy - size);
-                ctx.lineTo(cx + size, cy - size);
-            }
+            if (dir.x === 1) { ctx.moveTo(cx+size,cy); ctx.lineTo(cx-size,cy-size); ctx.lineTo(cx-size,cy+size); }
+            else if (dir.x === -1) { ctx.moveTo(cx-size,cy); ctx.lineTo(cx+size,cy-size); ctx.lineTo(cx+size,cy+size); }
+            else if (dir.y === -1) { ctx.moveTo(cx,cy-size); ctx.lineTo(cx-size,cy+size); ctx.lineTo(cx+size,cy+size); }
+            else { ctx.moveTo(cx,cy+size); ctx.lineTo(cx-size,cy-size); ctx.lineTo(cx+size,cy-size); }
             ctx.closePath();
             ctx.fill();
 
@@ -570,7 +708,7 @@ function GameCanvas({
     };
 
     return () => { if (ws) ws.close(); };
-  }, [setMatchId, setPlayers, selectedRoom, isCompetitive, setMatchNumber]);
+  }, [setMatchId, setPlayers, selectedRoom, isCompetitive, setDisplayMatchId, setEpoch]);
 
   const borderColor = isCompetitive ? 'var(--neon-pink)' : 'var(--neon-blue)';
 
@@ -582,8 +720,8 @@ function GameCanvas({
           <h1>🦀 SNAKE ARENA {selectedRoom}
             <span className="room-selector">
               {[1,2,3,4,5,6].map(n => (
-                <button 
-                  key={n} 
+                <button
+                  key={n}
                   className={`room-btn ${selectedRoom === n ? 'active' : ''} ${n > roomCount ? 'disabled' : ''}`}
                   onClick={() => n <= roomCount && setSelectedRoom(n)}
                   disabled={n > roomCount}
@@ -609,13 +747,13 @@ function GameCanvas({
 
 function App() {
   const [matchId, setMatchId] = useState<number | null>(null);
+  const [displayMatchId, setDisplayMatchId] = useState<string | null>(null);
+  const [, setEpoch] = useState(1);
   const [players, setPlayers] = useState<any[]>([]);
   const [perfLeaderboard, setPerfLeaderboard] = useState<any[]>([]);
   const [compLeaderboard, setCompLeaderboard] = useState<any[]>([]);
   const [activePage, setActivePage] = useState<'performance' | 'competitive' | 'leaderboard'>('performance');
-  const [competitiveMatchNumber, setCompetitiveMatchNumber] = useState(0);
 
-  // Throttle players update to prevent wallet modal from closing
   const playersRef = useRef<any[]>([]);
   const lastPlayersUpdate = useRef(0);
   const throttledSetPlayers = useRef((p: any[]) => {
@@ -626,8 +764,7 @@ function App() {
       setPlayers(p);
     }
   }).current;
-  
-  // Also throttle matchId
+
   const matchIdRef = useRef<number | null>(null);
   const throttledSetMatchId = useRef((id: number | null) => {
     if (matchIdRef.current !== id) {
@@ -654,10 +791,10 @@ function App() {
 
   const isCompetitive = activePage === 'competitive';
 
-  // Clear state on tab switch to avoid stale data
   const switchPage = (page: typeof activePage) => {
     setPlayers([]);
     setMatchId(null);
+    setDisplayMatchId(null);
     setActivePage(page);
   };
 
@@ -713,26 +850,35 @@ function App() {
                 <aside className="left-panel">
                   <div className="panel-section">
                     <h3>🤖 Bot Management</h3>
-                    <BotPanel />
+                    <BotManagement />
                   </div>
                   {isCompetitive && (
                     <div className="panel-section">
                       <h3>🎯 Arena Entry</h3>
-                      <CompetitiveEnter matchNumber={competitiveMatchNumber} />
+                      <CompetitiveEnter displayMatchId={displayMatchId} />
                     </div>
                   )}
                   <div className="panel-section">
                     <h3>🔮 Prediction</h3>
-                    <Prediction matchId={matchId} arenaType={activePage as 'performance' | 'competitive'} />
+                    <Prediction matchId={matchId} displayMatchId={displayMatchId} arenaType={activePage as 'performance' | 'competitive'} />
+                  </div>
+                  <div className="panel-section">
+                    <h3>⭐ Points</h3>
+                    <PointsPanel />
+                  </div>
+                  <div className="panel-section">
+                    <h3>🏪 Marketplace</h3>
+                    <Marketplace />
                   </div>
                 </aside>
 
-                <GameCanvas 
+                <GameCanvas
                   key={activePage}
-                  mode={activePage as any} 
-                  setMatchId={throttledSetMatchId} 
+                  mode={activePage as any}
+                  setMatchId={throttledSetMatchId}
                   setPlayers={throttledSetPlayers}
-                  setMatchNumber={isCompetitive ? setCompetitiveMatchNumber : undefined}
+                  setDisplayMatchId={setDisplayMatchId}
+                  setEpoch={setEpoch}
                 />
 
                 <aside className="right-panel">
