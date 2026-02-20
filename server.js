@@ -2262,6 +2262,15 @@ app.post('/api/bot/set-price', requireAdminKey, (req, res) => {
     res.json({ ok: true, bot: botRegistry[botId] });
 });
 
+// --- My Bots (by owner address) ---
+app.get('/api/bot/my-bots', (req, res) => {
+    const { owner } = req.query;
+    if (!owner) return res.status(400).json({ error: 'missing_owner' });
+    const ownerLower = owner.toString().toLowerCase();
+    const myBots = Object.values(botRegistry).filter(b => (b.owner || '').toLowerCase() === ownerLower);
+    res.json(myBots);
+});
+
 // --- Bot Lookup by Name (must be before :botId route) ---
 app.get('/api/bot/lookup', (req, res) => {
     const { name } = req.query;
