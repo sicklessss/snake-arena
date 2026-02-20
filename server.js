@@ -2801,7 +2801,7 @@ app.post('/api/bot/claim', async (req, res) => {
     const [botId, bot] = botEntry;
 
     // Check if already owned
-    if (bot.owner) {
+    if (bot.owner && bot.owner !== 'unknown') {
         return res.status(400).json({ error: 'already_claimed', message: 'This bot is already claimed' });
     }
 
