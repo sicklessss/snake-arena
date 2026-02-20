@@ -9,6 +9,7 @@ import { getDefaultConfig, RainbowKitProvider } from '@rainbow-me/rainbowkit';
 import '@rainbow-me/rainbowkit/styles.css';
 import './index.css';
 import { CONTRACTS, BOT_REGISTRY_ABI, PARI_MUTUEL_ABI, ERC20_ABI } from './contracts';
+import foodSvgUrl from './assets/food.svg';
 
 // --- CONFIG ---
 const config = getDefaultConfig({
@@ -437,6 +438,12 @@ function GameCanvas({
   setEpoch: (n: number) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const foodImgRef = useRef<HTMLImageElement | null>(null);
+  useEffect(() => {
+    const img = new Image();
+    img.src = foodSvgUrl;
+    img.onload = () => { foodImgRef.current = img; };
+  }, []);
   const [status, setStatus] = useState('Connecting...');
   const [overlay, setOverlay] = useState<React.ReactNode>(null);
   const [timer, setTimer] = useState('3:00');
@@ -571,12 +578,17 @@ function GameCanvas({
             }
         }
 
-        ctx.fillStyle = '#ff0055';
-        ctx.shadowColor = '#ff0055'; ctx.shadowBlur = 10;
         state.food.forEach((f: any) => {
-            ctx.beginPath(); ctx.arc(f.x*cellSize+cellSize/2, f.y*cellSize+cellSize/2, cellSize/3, 0, Math.PI*2); ctx.fill();
+            if (foodImgRef.current) {
+                const pad = cellSize * 0.1;
+                ctx.drawImage(foodImgRef.current, f.x * cellSize + pad, f.y * cellSize + pad, cellSize - pad * 2, cellSize - pad * 2);
+            } else {
+                ctx.fillStyle = '#ff0055';
+                ctx.shadowColor = '#ff0055'; ctx.shadowBlur = 10;
+                ctx.beginPath(); ctx.arc(f.x*cellSize+cellSize/2, f.y*cellSize+cellSize/2, cellSize/3, 0, Math.PI*2); ctx.fill();
+                ctx.shadowBlur = 0;
+            }
         });
-        ctx.shadowBlur = 0;
 
         (state.players || []).forEach((p: any) => {
             if (!p.body || p.body.length === 0) return;
