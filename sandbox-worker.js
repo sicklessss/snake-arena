@@ -1,253 +1,353 @@
 const { parentPort, workerData } = require('worker_threads');
 const fs = require('fs');
+const ivm = require('isolated-vm');
 const WebSocket = require('ws');
 
 // --- Worker Setup ---
-// The user script path is passed in workerData.
 const { scriptPath, botId, serverUrl } = workerData;
 
 const debugLog = (msg) => {
-    const timestamp = new Date().toISOString();
-    const logMsg = `[${timestamp}] [Worker ${botId}] ${msg}\n`;
-    try {
-        fs.appendFileSync('worker-debug.log', logMsg);
-    } catch (e) {}
-    if (parentPort) {
-        parentPort.postMessage({ type: 'debug', message: msg });
-    }
+    if (parentPort) parentPort.postMessage({ type: 'debug', message: msg });
 };
 
 debugLog(`Worker starting. scriptPath: ${scriptPath}, serverUrl: ${serverUrl}`);
 
 if (!fs.existsSync(scriptPath)) {
     debugLog(`Error: Script not found: ${scriptPath}`);
-    console.error(`[Worker ${botId}] Script not found: ${scriptPath}`);
     process.exit(1);
 }
 
 const userScriptContent = fs.readFileSync(scriptPath, 'utf8');
 
-// --- Sandbox Environment ---
-// We create a constrained execution environment.
-// We block 'require' and other sensitive globals by shadowing them.
-// We provide 'WebSocket' and a 'CONFIG' object.
+// --- isolated-vm Sandbox ---
+const MAX_WS = 3;        // max WebSocket connections per bot
+const MAX_TIMERS = 100;   // max timers per bot
+const MEMORY_MB = 16;     // memory limit per isolate
+const CALLBACK_TIMEOUT = 5000; // ms timeout for each callback dispatch
 
-// Safe setTimeout/setInterval wrappers that only accept functions, not strings
-// This prevents the `setTimeout.constructor('return process')()` escape
-const MAX_TIMERS = 100;
-let activeTimerCount = 0;
+const wsConnections = new Map();
+let wsIdCounter = 0;
+const hostTimers = new Map();
+let timerIdCounter = 0;
 
-function safeSetTimeout(fn, delay, ...args) {
-    if (typeof fn !== 'function') throw new Error('setTimeout requires a function');
-    if (activeTimerCount >= MAX_TIMERS) throw new Error('Too many active timers');
-    activeTimerCount++;
-    return setTimeout(() => {
-        activeTimerCount--;
-        try { fn(...args); } catch (e) {
-            parentPort.postMessage({ type: 'error', message: `Timer error: ${e.message}` });
-        }
-    }, delay);
-}
-
-function safeSetInterval(fn, delay, ...args) {
-    if (typeof fn !== 'function') throw new Error('setInterval requires a function');
-    if (activeTimerCount >= MAX_TIMERS) throw new Error('Too many active timers');
-    activeTimerCount++;
-    return setInterval((...a) => {
-        try { fn(...a); } catch (e) {
-            parentPort.postMessage({ type: 'error', message: `Interval error: ${e.message}` });
-        }
-    }, delay, ...args);
-}
-
-function safeClearTimeout(id) {
-    clearTimeout(id);
-    activeTimerCount = Math.max(0, activeTimerCount - 1);
-}
-
-function safeClearInterval(id) {
-    clearInterval(id);
-    activeTimerCount = Math.max(0, activeTimerCount - 1);
-}
-
-// Frozen console proxy — no prototype chain escape
-const safeConsole = Object.freeze({
-    log: (...args) => parentPort.postMessage({ type: 'log', message: args.join(' ') }),
-    error: (...args) => parentPort.postMessage({ type: 'error', message: args.join(' ') }),
-    info: (...args) => parentPort.postMessage({ type: 'log', message: args.join(' ') }),
-    warn: (...args) => parentPort.postMessage({ type: 'error', message: args.join(' ') }),
-});
-
-// Frozen process stub — minimal, no real access
-const safeProcess = Object.freeze({
-    env: Object.freeze({ NODE_ENV: 'production' }),
-    nextTick: (fn, ...args) => { if (typeof fn === 'function') process.nextTick(fn, ...args); },
-    stdout: Object.freeze({ write: () => {} }),
-    stderr: Object.freeze({ write: () => {} }),
-    cwd: () => '/',
-    uptime: () => process.uptime(),
-});
-
-// Execute the user script using vm module for proper sandboxing
-const vm = require('vm');
+let isolate, context;
 
 try {
-    debugLog('Creating sandbox context');
+    debugLog('Creating isolated-vm sandbox');
 
-    // Blocked function — throws on any call
-    const blocked = (name) => () => { throw new Error(`Security Error: '${name}' is blocked.`); };
+    isolate = new ivm.Isolate({ memoryLimit: MEMORY_MB });
+    context = isolate.createContextSync();
+    const jail = context.global;
+    jail.setSync('global', jail.derefInto());
 
-    // Create sandbox context with blocked dangerous globals
-    const sandbox = {
-        WebSocket: function RestrictedWebSocket(url, ...args) {
-            // Only allow connections to localhost to prevent SSRF
+    // --- Inject host functions ---
+
+    // Console logging
+    jail.setSync('$_log', new ivm.Reference((level, msg) => {
+        parentPort.postMessage({
+            type: level === 'error' ? 'error' : 'log',
+            message: String(msg).slice(0, 500),
+        });
+    }));
+
+    // WebSocket create — returns wsId or -1 on error
+    jail.setSync('$_wsCreate', new ivm.Reference((url) => {
+        if (wsConnections.size >= MAX_WS) return -2; // too many connections
+        try {
+            const parsed = new URL(url);
+            if (!['localhost', '127.0.0.1', '::1'].includes(parsed.hostname)) return -1;
+        } catch { return -1; }
+
+        const id = wsIdCounter++;
+        const ws = new WebSocket(url);
+        wsConnections.set(id, ws);
+
+        ws.on('open', () => {
             try {
-                const parsed = new URL(url);
-                if (parsed.hostname !== 'localhost' && parsed.hostname !== '127.0.0.1' && parsed.hostname !== '::1') {
-                    throw new Error('Security Error: WebSocket connections only allowed to localhost');
-                }
+                context.evalSync(
+                    `(function(){var h=global.__ws[${id}];if(h&&h.oo){h.rs=1;h.oo();}})()`,
+                    { timeout: CALLBACK_TIMEOUT }
+                );
+            } catch (e) { debugLog(`WS open callback error: ${e.message}`); }
+        });
+
+        ws.on('message', (data) => {
+            const str = data.toString();
+            try {
+                context.evalSync(
+                    `(function(){var h=global.__ws[${id}];if(h&&h.om)h.om({data:${JSON.stringify(str)}});})()`,
+                    { timeout: CALLBACK_TIMEOUT }
+                );
+            } catch (e) { debugLog(`WS message callback error: ${e.message}`); }
+        });
+
+        ws.on('close', (code) => {
+            try {
+                context.evalSync(
+                    `(function(){var h=global.__ws[${id}];if(h){h.rs=3;if(h.oc)h.oc({code:${code||1000}});}delete global.__ws[${id}];})()`,
+                    { timeout: CALLBACK_TIMEOUT }
+                );
+            } catch (e) { debugLog(`WS close callback error: ${e.message}`); }
+            wsConnections.delete(id);
+        });
+
+        ws.on('error', (err) => {
+            try {
+                context.evalSync(
+                    `(function(){var h=global.__ws[${id}];if(h&&h.oe)h.oe({message:'error'});})()`,
+                    { timeout: CALLBACK_TIMEOUT }
+                );
+            } catch (e) { debugLog(`WS error callback error: ${e.message}`); }
+        });
+
+        return id;
+    }));
+
+    // WebSocket send
+    jail.setSync('$_wsSend', new ivm.Reference((id, data) => {
+        const ws = wsConnections.get(id);
+        if (ws && ws.readyState === WebSocket.OPEN) ws.send(String(data).slice(0, 4096));
+    }));
+
+    // WebSocket close
+    jail.setSync('$_wsClose', new ivm.Reference((id) => {
+        const ws = wsConnections.get(id);
+        if (ws) ws.close();
+    }));
+
+    // setTimeout — host manages real timers, dispatches into isolate
+    jail.setSync('$_setTimeout', new ivm.Reference((id, delay) => {
+        if (hostTimers.size >= MAX_TIMERS) return;
+        const ms = Math.max(0, Math.min(Number(delay) || 0, 60000));
+        const timer = global.setTimeout(() => {
+            hostTimers.delete(id);
+            try {
+                context.evalSync(
+                    `(function(){var fn=global.__tm[${id}];if(fn){delete global.__tm[${id}];fn();}})()`,
+                    { timeout: CALLBACK_TIMEOUT }
+                );
+            } catch (e) { debugLog(`Timer ${id} callback error: ${e.message}`); }
+        }, ms);
+        hostTimers.set(id, timer);
+    }));
+
+    // setInterval
+    jail.setSync('$_setInterval', new ivm.Reference((id, delay) => {
+        if (hostTimers.size >= MAX_TIMERS) return;
+        const ms = Math.max(50, Math.min(Number(delay) || 100, 60000));
+        const timer = global.setInterval(() => {
+            try {
+                context.evalSync(
+                    `(function(){var fn=global.__tm[${id}];if(fn)fn();})()`,
+                    { timeout: CALLBACK_TIMEOUT }
+                );
             } catch (e) {
-                if (e.message.includes('Security Error')) throw e;
-                throw new Error('Security Error: Invalid WebSocket URL');
+                debugLog(`Interval ${id} callback error: ${e.message}`);
+                clearInterval(timer);
+                hostTimers.delete(id);
             }
-            return new WebSocket(url, ...args);
-        },
-        console: safeConsole,
-        CONFIG: Object.freeze({
-            serverUrl: serverUrl,
-            botId: botId
-        }),
-        // Safe JS built-ins
-        JSON: JSON,
-        Math: Math,
-        Date: Date,
-        Array: Array,
-        Object: Object,
-        String: String,
-        Number: Number,
-        Boolean: Boolean,
-        Map: Map,
-        Set: Set,
-        RegExp: RegExp,
-        Error: Error,
-        TypeError: TypeError,
-        RangeError: RangeError,
-        parseInt: parseInt,
-        parseFloat: parseFloat,
-        isNaN: isNaN,
-        isFinite: isFinite,
-        Infinity: Infinity,
-        NaN: NaN,
-        undefined: undefined,
-        ArrayBuffer: ArrayBuffer,
-        Uint8Array: Uint8Array,
-        Promise: Promise,
-        // Safe timer wrappers (prevent constructor chain escape)
-        setTimeout: safeSetTimeout,
-        setInterval: safeSetInterval,
-        clearTimeout: safeClearTimeout,
-        clearInterval: safeClearInterval,
-        // Blocked globals
-        require: blocked('require'),
-        eval: blocked('eval'),
-        Function: blocked('Function'),
-        Buffer: undefined,
-        process: safeProcess,
-        module: Object.freeze({}),
-        exports: Object.freeze({}),
-        __dirname: undefined,
-        __filename: undefined,
-        global: undefined,
-        globalThis: undefined,
-        // Block networking/filesystem
-        fs: undefined,
-        net: undefined,
-        http: undefined,
-        https: undefined,
-        child_process: undefined,
-        Proxy: undefined,
-        Reflect: undefined,
-        Symbol: undefined,
-        WeakRef: undefined,
-        FinalizationRegistry: undefined,
-        SharedArrayBuffer: undefined,
-        Atomics: undefined,
-    };
+        }, ms);
+        hostTimers.set(id, timer);
+    }));
 
-    // Create context from sandbox
-    vm.createContext(sandbox);
+    // clearTimeout / clearInterval
+    jail.setSync('$_clearTimer', new ivm.Reference((id) => {
+        const timer = hostTimers.get(id);
+        if (timer) {
+            clearTimeout(timer);
+            clearInterval(timer);
+            hostTimers.delete(id);
+        }
+    }));
 
-    // Freeze prototypes inside sandbox to prevent constructor chain escape
-    vm.runInContext(`
-        (function() {
-            var freeze = Object.freeze;
-            [Array, Object, String, Number, Boolean, RegExp, Map, Set, Error, TypeError, RangeError, Promise].forEach(function(C) {
-                if (C && C.prototype) {
-                    freeze(C.prototype);
-                    if (C.prototype.constructor) freeze(C.prototype.constructor);
+    // --- Wrapper code injected before user script ---
+    const wrapperCode = `
+// --- WebSocket handlers registry ---
+global.__ws = {};
+// --- Timer registry ---
+global.__tm = {};
+var __tmId = 0;
+
+// --- WebSocket class ---
+function WebSocket(url) {
+    var id = $_wsCreate.applySync(undefined, [url]);
+    if (id === -1) throw new Error('Security Error: WebSocket connections only allowed to localhost');
+    if (id === -2) throw new Error('Too many WebSocket connections');
+    this._id = id;
+    this.readyState = 0;
+    this.CONNECTING = 0; this.OPEN = 1; this.CLOSING = 2; this.CLOSED = 3;
+    global.__ws[id] = { rs: 0, self: this };
+}
+WebSocket.CONNECTING = 0;
+WebSocket.OPEN = 1;
+WebSocket.CLOSING = 2;
+WebSocket.CLOSED = 3;
+WebSocket.prototype.send = function(data) {
+    $_wsSend.applySync(undefined, [this._id, String(data)]);
+};
+WebSocket.prototype.close = function() {
+    $_wsClose.applySync(undefined, [this._id]);
+};
+// Node.js-style .on(event, handler) — used by bot code
+WebSocket.prototype.on = function(event, fn) {
+    var map = {open:'oo', message:'om', close:'oc', error:'oe'};
+    var short = map[event];
+    if (!short) return this;
+    var h = global.__ws[this._id];
+    if (!h) return this;
+    var self = this;
+    if (short === 'oo') {
+        h[short] = function() { self.readyState = 1; fn.call(self); };
+    } else if (short === 'oc') {
+        h[short] = function(evt) { self.readyState = 3; fn.call(self, evt); };
+    } else if (short === 'om') {
+        // Node ws: onmessage passes raw data, not {data:...}
+        h[short] = function(evt) { fn.call(self, evt.data); };
+    } else {
+        h[short] = function(evt) { fn.call(self, evt); };
+    }
+    return this;
+};
+// Also support browser-style onXxx setters
+(function() {
+    var props = {onopen:'oo', onmessage:'om', onclose:'oc', onerror:'oe'};
+    var keys = ['onopen','onmessage','onclose','onerror'];
+    for (var i = 0; i < keys.length; i++) {
+        (function(prop, short) {
+            Object.defineProperty(WebSocket.prototype, prop, {
+                set: function(fn) {
+                    var h = global.__ws[this._id];
+                    if (h) {
+                        var self = this;
+                        if (short === 'oo') {
+                            h[short] = function() { self.readyState = 1; fn.call(self); };
+                        } else if (short === 'oc') {
+                            h[short] = function(evt) { self.readyState = 3; fn.call(self, evt); };
+                        } else {
+                            h[short] = function(evt) { fn.call(self, evt); };
+                        }
+                    }
+                },
+                get: function() {
+                    var h = global.__ws[this._id];
+                    return h ? h[short] : undefined;
                 }
             });
-            // Freeze Object methods that could be used for escape
-            freeze(Object);
-            freeze(Array);
-            freeze(Promise);
-        })();
-    `, sandbox);
+        })(keys[i], props[keys[i]]);
+    }
+})();
 
-    debugLog('Running user script');
+// --- Console ---
+var console = {
+    log: function() { $_log.applySync(undefined, ['log', Array.prototype.slice.call(arguments).join(' ')]); },
+    error: function() { $_log.applySync(undefined, ['error', Array.prototype.slice.call(arguments).join(' ')]); },
+    info: function() { $_log.applySync(undefined, ['log', Array.prototype.slice.call(arguments).join(' ')]); },
+    warn: function() { $_log.applySync(undefined, ['error', Array.prototype.slice.call(arguments).join(' ')]); },
+};
 
-    // Run the user script in the sandboxed context
-    vm.runInContext(userScriptContent, sandbox, {
-        filename: `bot_${botId}.js`,
-        timeout: 30000, // 30 second timeout for script initialization
-    });
+// --- Timer functions ---
+function setTimeout(fn, delay) {
+    if (typeof fn !== 'function') throw new Error('setTimeout requires a function');
+    var id = __tmId++;
+    global.__tm[id] = fn;
+    $_setTimeout.applySync(undefined, [id, Number(delay) || 0]);
+    return id;
+}
+function setInterval(fn, delay) {
+    if (typeof fn !== 'function') throw new Error('setInterval requires a function');
+    var id = __tmId++;
+    global.__tm[id] = fn;
+    $_setInterval.applySync(undefined, [id, Number(delay) || 0]);
+    return id;
+}
+function clearTimeout(id) {
+    delete global.__tm[id];
+    $_clearTimer.applySync(undefined, [id]);
+}
+function clearInterval(id) {
+    delete global.__tm[id];
+    $_clearTimer.applySync(undefined, [id]);
+}
+
+// --- CONFIG ---
+var CONFIG = { serverUrl: ${JSON.stringify(serverUrl)}, botId: ${JSON.stringify(botId)} };
+
+// --- Block dangerous globals ---
+var require = undefined;
+var module = undefined;
+var exports = undefined;
+var __dirname = undefined;
+var __filename = undefined;
+var process = undefined;
+var Buffer = undefined;
+`;
+
+    // Compile and run wrapper + user script
+    debugLog('Running user script in isolate');
+    const fullCode = wrapperCode + '\n;\n' + userScriptContent;
+    const script = isolate.compileScriptSync(fullCode, { filename: `bot_${botId}.js` });
+    script.runSync(context, { timeout: 30000 }); // 30s for initial setup
 
     debugLog('User script initialization complete');
     parentPort.postMessage({ type: 'status', status: 'running' });
 
-    // Keep worker alive - the WebSocket connection in sandbox needs the event loop
-    debugLog('Script executed, keeping alive');
-
-    // Use a shorter interval and add a keep-alive check
-    const keepAlive = setInterval(() => {
+    // Keep worker alive
+    const keepAlive = global.setInterval(() => {
         parentPort.postMessage({ type: 'ping', timestamp: Date.now() });
+        // Check isolate health
+        try {
+            const stats = isolate.getHeapStatisticsSync();
+            if (stats.used_heap_size > MEMORY_MB * 1024 * 1024 * 0.9) {
+                debugLog(`Memory warning: ${(stats.used_heap_size / 1024 / 1024).toFixed(1)}MB used`);
+            }
+        } catch (e) {
+            debugLog('Isolate disposed or unhealthy, exiting');
+            process.exit(1);
+        }
     }, 10000);
 
-    // Prevent process from exiting
-    if (process.stdin && process.stdin.resume) {
-        process.stdin.resume();
-    }
-
 } catch (err) {
-    debugLog(`Error during execution: ${err.message}\n${err.stack}`);
+    debugLog(`Sandbox error: ${err.message}`);
     parentPort.postMessage({ type: 'error', message: `Sandbox error: ${err.message}` });
-    // Give some time for the message to be sent
-    setTimeout(() => process.exit(1), 100);
+    global.setTimeout(() => process.exit(1), 100);
 }
 
-// Handle messages from parent
+// Cleanup function
+function cleanup() {
+    for (const [id, ws] of wsConnections) { try { ws.close(); } catch {} }
+    wsConnections.clear();
+    for (const [id, timer] of hostTimers) {
+        try { clearTimeout(timer); clearInterval(timer); } catch {}
+    }
+    hostTimers.clear();
+    try { if (isolate && !isolate.isDisposed) isolate.dispose(); } catch {}
+}
+
+// Handle stop from parent
 parentPort.on('message', (msg) => {
     if (msg.type === 'stop') {
-        debugLog('Received stop command, exiting');
+        debugLog('Received stop command, cleaning up');
+        cleanup();
         process.exit(0);
     }
 });
 
-// Catch any uncaught exceptions in the worker
+// Catch uncaught exceptions
 process.on('uncaughtException', (err) => {
-    debugLog(`Uncaught exception: ${err.message}\n${err.stack}`);
-    parentPort.postMessage({ type: 'error', message: `Uncaught exception: ${err.message}` });
-    setTimeout(() => process.exit(1), 100);
+    debugLog(`Uncaught exception: ${err.message}`);
+    parentPort.postMessage({ type: 'error', message: `Uncaught: ${err.message}` });
+    cleanup();
+    global.setTimeout(() => process.exit(1), 100);
 });
 
-process.on('unhandledRejection', (reason, promise) => {
+process.on('unhandledRejection', (reason) => {
     const msg = reason instanceof Error ? reason.message : String(reason);
     debugLog(`Unhandled rejection: ${msg}`);
     parentPort.postMessage({ type: 'error', message: `Unhandled rejection: ${msg}` });
 });
 
-// Handle graceful exit
 process.on('SIGTERM', () => {
     debugLog('Worker received SIGTERM');
+    cleanup();
     process.exit(0);
 });

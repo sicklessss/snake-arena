@@ -60,6 +60,10 @@ const SNAKE_BOT_NFT_ABI = [
 
 // Edit token store: token -> { botId, address, expires }
 const editTokens = new Map();
+// Used tx hashes for competitive entry (prevent replay)
+const usedEntryTxHashes = new Set();
+// Track on-chain settled match IDs for claim lookup (bounded ring buffer)
+const settledOnChainMatchIds = [];
 // Clean up expired tokens every hour
 setInterval(() => {
     const now = Date.now();
@@ -613,7 +617,7 @@ async function _drainTxQueue() {
     _txRunning = true;
     try {
         while (_txQueue.length > 0) {
-            const { label, fn, resolve, reject } = _txQueue.shift();
+            const { label, fn, resolve, reject, retries } = _txQueue.shift();
             try {
                 // Use 'pending' nonce so we don't collide with stuck mempool txs
                 let overrides = {};
@@ -629,8 +633,16 @@ async function _drainTxQueue() {
                 const result = await fn(overrides);
                 if (resolve) resolve(result);
             } catch (e) {
-                log.warn('[TxQueue] ' + label + ' failed: ' + e.message);
-                if (reject) reject(e);
+                const attempt = retries || 0;
+                const isRetryable = label.startsWith('createMatch') || label.startsWith('settleMatch');
+                if (isRetryable && attempt < 3) {
+                    log.warn(`[TxQueue] ${label} failed (attempt ${attempt + 1}/3), retrying in 5s: ${e.message}`);
+                    await new Promise(r => setTimeout(r, 5000));
+                    _txQueue.unshift({ label, fn, resolve, reject, retries: attempt + 1 });
+                } else {
+                    log.warn(`[TxQueue] ${label} failed${isRetryable ? ' (gave up after 3 attempts)' : ''}: ${e.message}`);
+                    if (reject) reject(e);
+                }
             }
         }
     } finally {
@@ -1496,6 +1508,8 @@ class GameRoom {
                 const tx = await pariMutuelContract.settleMatch(onChainMatchId, winnerBytes32Array, overrides);
                 await tx.wait();
                 log.important(`[Blockchain] settleMatch #${onChainMatchId} settled with ${placements.length} winner(s): ${placements.join(', ')}`);
+                settledOnChainMatchIds.push(onChainMatchId);
+                if (settledOnChainMatchIds.length > 200) settledOnChainMatchIds.shift();
             });
         }
 
@@ -1689,8 +1703,9 @@ class GameRoom {
         // Create match on-chain (PariMutuel USDC contract) — fire-and-forget
         if (pariMutuelContract) {
             const onChainMatchId = this.currentMatchId;
-            const startTime = Math.floor(Date.now() / 1000) + 10; // 10 seconds in the future
             enqueueTx(`createMatch ${onChainMatchId}`, async (overrides) => {
+                // Calculate startTime at execution time (not enqueue time) to avoid "Start time must be in future"
+                const startTime = Math.floor(Date.now() / 1000) + 30;
                 const tx = await pariMutuelContract.createMatch(onChainMatchId, startTime, overrides);
                 await tx.wait();
                 log.important(`[Blockchain] createMatch #${onChainMatchId} (startTime=${startTime}) confirmed`);
@@ -2871,14 +2886,36 @@ app.post('/api/competitive/enter', async (req, res) => {
     const room = rooms.get('competitive-1');
     if (!room) return res.status(500).json({ error: 'no_competitive_room' });
 
+    // Prevent txHash replay
+    if (usedEntryTxHashes.has(txHash.toLowerCase())) {
+        return res.status(400).json({ error: 'tx_already_used', message: 'This transaction has already been used for entry' });
+    }
+
     // Verify transaction on-chain
     try {
-        const receipt = await provider.getTransactionReceipt(txHash);
+        const [receipt, tx] = await Promise.all([
+            provider.getTransactionReceipt(txHash),
+            provider.getTransaction(txHash),
+        ]);
         if (!receipt || receipt.status !== 1) {
             return res.status(400).json({ error: 'tx_not_confirmed', message: 'Transaction not confirmed on-chain' });
         }
+        if (!tx) {
+            return res.status(400).json({ error: 'tx_not_found', message: 'Transaction not found on-chain' });
+        }
+        // Verify payment amount (>= 0.001 ETH)
+        if (tx.value < ethers.parseEther('0.001')) {
+            return res.status(400).json({ error: 'insufficient_payment', message: 'Entry fee must be at least 0.001 ETH' });
+        }
+        // Verify recipient is the backend wallet
+        const expectedTo = backendWallet ? backendWallet.address.toLowerCase() : null;
+        if (!expectedTo || tx.to?.toLowerCase() !== expectedTo) {
+            return res.status(400).json({ error: 'wrong_recipient', message: 'Payment must be sent to the correct address' });
+        }
+        // Mark txHash as used
+        usedEntryTxHashes.add(txHash.toLowerCase());
     } catch (e) {
-        return res.status(400).json({ error: 'tx_verification_failed', message: 'Could not verify transaction: ' + e.message });
+        return res.status(400).json({ error: 'tx_verification_failed', message: 'Could not verify transaction' });
     }
 
     // Compare numeric part: "A4" vs "A3" → 4 >= 3 ✓
@@ -3340,6 +3377,37 @@ app.get('/api/bet/winnings', async (req, res) => {
         res.json({ winnings: ethers.formatUnits(w, 6), winningsWei: w.toString() }); // USDC 6 decimals
     } catch (e) {
         res.json({ winnings: '0', error: e.message });
+    }
+});
+
+// Get all claimable winnings for a user across recent settled matches
+app.get('/api/pari-mutuel/claimable', async (req, res) => {
+    const { address } = req.query;
+    if (!address) return res.status(400).json({ error: 'missing address' });
+    if (!pariMutuelContract) return res.json({ claimable: [], total: '0' });
+
+    try {
+        const claimable = [];
+        // Check recent settled matches in parallel (batch of 10 at a time)
+        for (let i = 0; i < settledOnChainMatchIds.length; i += 10) {
+            const batch = settledOnChainMatchIds.slice(i, i + 10);
+            const results = await Promise.allSettled(
+                batch.map(mid => pariMutuelContract.getUserPotentialWinnings(mid, address))
+            );
+            for (let j = 0; j < results.length; j++) {
+                if (results[j].status === 'fulfilled' && results[j].value > 0n) {
+                    claimable.push({
+                        matchId: batch[j],
+                        winnings: ethers.formatUnits(results[j].value, 6),
+                        winningsWei: results[j].value.toString(),
+                    });
+                }
+            }
+        }
+        const total = claimable.reduce((s, c) => s + parseFloat(c.winnings), 0);
+        res.json({ claimable, total: total.toFixed(2) });
+    } catch (e) {
+        res.json({ claimable: [], total: '0', error: e.message });
     }
 });
 

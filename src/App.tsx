@@ -104,8 +104,63 @@ function WalletButton() {
   const { address, isConnected } = useAccount();
   const { connect, connectors } = useConnect();
   const { disconnect } = useDisconnect();
+  const { writeContractAsync } = useWriteContract();
   const [showModal, setShowModal] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
+  const [claimable, setClaimable] = useState<{ matchId: number; winnings: string; winningsWei: string }[]>([]);
+  const [claimTotal, setClaimTotal] = useState('0');
+  const [claiming, setClaiming] = useState(false);
+  const [claimStatus, setClaimStatus] = useState('');
+
+  // Fetch claimable winnings when menu opens
+  useEffect(() => {
+    if (!showMenu || !address) return;
+    setClaimStatus('');
+    fetch(`/api/pari-mutuel/claimable?address=${address}`)
+      .then(r => r.json())
+      .then(data => {
+        setClaimable(data.claimable || []);
+        setClaimTotal(data.total || '0');
+      })
+      .catch(() => { setClaimable([]); setClaimTotal('0'); });
+  }, [showMenu, address]);
+
+  const handleClaim = async () => {
+    if (!claimable.length || claiming) return;
+    setClaiming(true);
+    setClaimStatus('Claiming...');
+    let claimed = 0;
+    for (const item of claimable) {
+      try {
+        await writeContractAsync({
+          address: CONTRACTS.pariMutuel as `0x${string}`,
+          abi: PARI_MUTUEL_ABI,
+          functionName: 'claimWinnings',
+          args: [BigInt(item.matchId)],
+        });
+        claimed++;
+        setClaimStatus(`Claimed ${claimed}/${claimable.length}...`);
+      } catch (e: any) {
+        const msg = e?.shortMessage || e?.message || '';
+        if (msg.includes('rejected') || msg.includes('denied')) {
+          setClaimStatus('Cancelled');
+          setClaiming(false);
+          return;
+        }
+        // Skip this match, continue with others
+        setClaimStatus(`Match #${item.matchId} failed, continuing...`);
+      }
+    }
+    setClaiming(false);
+    setClaimStatus(claimed > 0 ? `Claimed ${claimed} match(es)!` : 'No claims succeeded');
+    // Refresh claimable list
+    if (address) {
+      fetch(`/api/pari-mutuel/claimable?address=${address}`)
+        .then(r => r.json())
+        .then(data => { setClaimable(data.claimable || []); setClaimTotal(data.total || '0'); })
+        .catch(() => {});
+    }
+  };
 
   // De-duplicate connectors by display name
   const uniqueConnectors = connectors.reduce<typeof connectors>((acc, c) => {
@@ -154,6 +209,30 @@ function WalletButton() {
               >
                 Copy Address
               </button>
+              {/* Claim USDC winnings section */}
+              <div style={{ borderTop: '1px solid #1b1b3b', margin: '4px 0', padding: '6px 10px' }}>
+                <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', marginBottom: 4 }}>
+                  Claimable: <span style={{ color: parseFloat(claimTotal) > 0 ? 'var(--neon-green)' : '#fff' }}>{claimTotal} USDC</span>
+                </div>
+                {parseFloat(claimTotal) > 0 && (
+                  <button
+                    onClick={handleClaim}
+                    disabled={claiming}
+                    style={{
+                      width: '100%', padding: '6px 10px', borderRadius: 6,
+                      background: claiming ? '#333' : 'var(--neon-green)',
+                      color: claiming ? '#888' : '#000', border: 'none',
+                      cursor: claiming ? 'not-allowed' : 'pointer',
+                      fontFamily: 'Orbitron, monospace', fontSize: '0.7rem', fontWeight: 'bold',
+                    }}
+                  >
+                    {claiming ? 'Claiming...' : `Claim ${claimTotal} USDC`}
+                  </button>
+                )}
+                {claimStatus && (
+                  <div style={{ fontSize: '0.65rem', color: 'var(--neon-blue)', marginTop: 3 }}>{claimStatus}</div>
+                )}
+              </div>
               <button
                 onClick={() => { disconnect(); setShowMenu(false); }}
                 style={{
@@ -475,18 +554,52 @@ function BotManagement() {
         return;
       }
 
-      // Step 1: Approve marketplace
-      setSellStatus('1/2 Approving marketplace...');
-      const approveTx = await writeContractAsync({
+      // Verify caller owns the NFT
+      setSellStatus('Verifying NFT ownership...');
+      const nftOwner = await publicClient.readContract({
         address: CONTRACTS.snakeBotNFT as `0x${string}`,
         abi: SNAKE_BOT_NFT_ABI,
-        functionName: 'approve',
-        args: [CONTRACTS.botMarketplace as `0x${string}`, tokenId],
-      });
-      await publicClient.waitForTransactionReceipt({ hash: approveTx as `0x${string}` });
+        functionName: 'ownerOf',
+        args: [tokenId],
+      }) as string;
+      if (nftOwner.toLowerCase() !== address.toLowerCase()) {
+        setSellStatus(`You don't own this NFT (owner: ${nftOwner.slice(0,6)}...${nftOwner.slice(-4)})`);
+        setSellBusy(false);
+        return;
+      }
+
+      // Step 1: Check if already approved, skip if so
+      const currentApproval = await publicClient.readContract({
+        address: CONTRACTS.snakeBotNFT as `0x${string}`,
+        abi: SNAKE_BOT_NFT_ABI,
+        functionName: 'getApproved',
+        args: [tokenId],
+      }) as string;
+      if (currentApproval.toLowerCase() !== (CONTRACTS.botMarketplace as string).toLowerCase()) {
+        setSellStatus('1/2 Approving marketplace...');
+        const approveTx = await writeContractAsync({
+          address: CONTRACTS.snakeBotNFT as `0x${string}`,
+          abi: SNAKE_BOT_NFT_ABI,
+          functionName: 'approve',
+          args: [CONTRACTS.botMarketplace as `0x${string}`, tokenId],
+        });
+        await publicClient.waitForTransactionReceipt({ hash: approveTx as `0x${string}` });
+        // Wait for on-chain state to propagate and wallet nonce to update
+        setSellStatus('Waiting for approval to confirm...');
+        for (let i = 0; i < 10; i++) {
+          await new Promise(r => setTimeout(r, 2000));
+          const newApproval = await publicClient.readContract({
+            address: CONTRACTS.snakeBotNFT as `0x${string}`,
+            abi: SNAKE_BOT_NFT_ABI,
+            functionName: 'getApproved',
+            args: [tokenId],
+          }) as string;
+          if (newApproval.toLowerCase() === (CONTRACTS.botMarketplace as string).toLowerCase()) break;
+        }
+      }
 
       // Step 2: List on marketplace
-      setSellStatus('2/2 Listing on marketplace...');
+      setSellStatus('Listing on marketplace...');
       const priceWei = parseEther(sellPrice);
       const listTx = await writeContractAsync({
         address: CONTRACTS.botMarketplace as `0x${string}`,
@@ -499,7 +612,23 @@ function BotManagement() {
       setSellStatus('Listed! Your bot is now on the marketplace.');
       if (miscTimerRef.current) clearTimeout(miscTimerRef.current); miscTimerRef.current = setTimeout(() => { setSellBot(null); setSellPrice(''); setSellStatus(''); }, 2000);
     } catch (e: any) {
-      setSellStatus(e?.shortMessage || e?.message || 'Transaction failed');
+      let reason = '';
+      let cur = e;
+      while (cur) {
+        if (cur.reason) { reason = cur.reason; break; }
+        if (cur.data?.args?.[0]) { reason = String(cur.data.args[0]); break; }
+        cur = cur.cause;
+      }
+      const msg = reason || e?.shortMessage || e?.message || 'Transaction failed';
+      if (msg.includes('user rejected') || msg.includes('denied')) {
+        setSellStatus('Cancelled');
+      } else if (msg.includes('Not NFT owner')) {
+        setSellStatus('You do not own this NFT');
+      } else if (msg.includes('Not approved')) {
+        setSellStatus('NFT approval failed — please try again');
+      } else {
+        setSellStatus(msg);
+      }
     }
     setSellBusy(false);
   };
@@ -755,7 +884,32 @@ function Prediction({ displayMatchId, epoch, arenaType }: { displayMatchId: stri
         return;
       }
 
-      // Step 1: Check USDC allowance, approve if needed
+      // Step 1: Check match exists on-chain
+      setStatus('验证链上比赛...');
+      try {
+        const matchData = await publicClient.readContract({
+          address: CONTRACTS.pariMutuel as `0x${string}`,
+          abi: PARI_MUTUEL_ABI,
+          functionName: 'matches',
+          args: [BigInt(mid)],
+        }) as any;
+        if (!matchData || matchData[0] === 0n) {
+          setStatus('❌ 该比赛尚未在链上创建 — 请等待新比赛开始后再下注');
+          setBusy(false);
+          return;
+        }
+        if (matchData[4]) { // settled
+          setStatus('❌ 该比赛已结算');
+          setBusy(false);
+          return;
+        }
+      } catch {
+        setStatus('❌ 无法查询链上比赛状态，请稍后重试');
+        setBusy(false);
+        return;
+      }
+
+      // Step 2: Check USDC allowance, approve max if needed
       setStatus('检查 USDC 授权...');
       const currentAllowance = await publicClient.readContract({
         address: CONTRACTS.usdc as `0x${string}`,
@@ -766,16 +920,17 @@ function Prediction({ displayMatchId, epoch, arenaType }: { displayMatchId: stri
 
       if (currentAllowance < usdcAmount) {
         setStatus('授权 USDC...');
+        const maxApproval = BigInt('0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff');
         const approveTx = await writeContractAsync({
           address: CONTRACTS.usdc as `0x${string}`,
           abi: ERC20_ABI,
           functionName: 'approve',
-          args: [CONTRACTS.pariMutuel as `0x${string}`, usdcAmount],
+          args: [CONTRACTS.pariMutuel as `0x${string}`, maxApproval],
         });
         await publicClient.waitForTransactionReceipt({ hash: approveTx as `0x${string}` });
       }
 
-      // Step 2: Place bet on-chain (USDC, no ETH value)
+      // Step 3: Place bet on-chain (USDC, no ETH value)
       setStatus('签名预测交易...');
       const betTx = await writeContractAsync({
         address: CONTRACTS.pariMutuel as `0x${string}`,
@@ -790,17 +945,27 @@ function Prediction({ displayMatchId, epoch, arenaType }: { displayMatchId: stri
       setStatus(`✅ 预测成功！${amount} USDC 预测 ${botName} 赢`);
       setAmount('');
     } catch (e: any) {
-      const msg = e?.shortMessage || e?.message || '交易失败';
+      // Extract revert reason from error chain
+      let reason = '';
+      let cur = e;
+      while (cur) {
+        if (cur.reason) { reason = cur.reason; break; }
+        if (cur.data?.args?.[0]) { reason = String(cur.data.args[0]); break; }
+        cur = cur.cause;
+      }
+      const msg = reason || e?.shortMessage || e?.message || '交易失败';
       if (msg.includes('user rejected') || msg.includes('denied')) {
         setStatus('已取消');
-      } else if (msg.includes('settled')) {
-        setStatus('❌ 该比赛已结算');
-      } else if (msg.includes('Betting closed')) {
-        setStatus('❌ 该比赛下注已关闭');
       } else if (msg.includes('Match does not exist')) {
-        setStatus('❌ 该比赛尚未创建（等待比赛开始）');
-      } else if (msg.includes('exceeds') || msg.includes('transfer')) {
+        setStatus('❌ 该比赛尚未在链上创建 — 请等待比赛开始后再下注');
+      } else if (msg.includes('Betting closed')) {
+        setStatus('❌ 下注窗口已关闭（比赛开始后5分钟内可下注）');
+      } else if (msg.includes('settled') || msg.includes('already settled')) {
+        setStatus('❌ 该比赛已结算');
+      } else if (msg.includes('USDC transfer failed')) {
         setStatus('❌ USDC 转账失败 — 请确认余额充足且已授权');
+      } else if (msg.includes('Bet amount')) {
+        setStatus('❌ 下注金额必须大于 0');
       } else {
         setStatus('❌ ' + msg);
       }
