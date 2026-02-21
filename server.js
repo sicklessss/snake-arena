@@ -191,7 +191,9 @@ function saveReferralData() {
     try {
         const dataDir = path.dirname(REFERRAL_DATA_FILE);
         if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
-        fs.writeFileSync(REFERRAL_DATA_FILE, JSON.stringify(referralData, null, 2));
+        fs.writeFile(REFERRAL_DATA_FILE, JSON.stringify(referralData, null, 2), (err) => {
+            if (err) log.error('[Referral] Failed to save data:', err.message);
+        });
     } catch (e) {
         log.error('[Referral] Failed to save data:', e.message);
     }
@@ -215,7 +217,9 @@ function savePoints() {
     try {
         const dataDir = path.dirname(POINTS_DATA_FILE);
         if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
-        fs.writeFileSync(POINTS_DATA_FILE, JSON.stringify(pointsData, null, 2));
+        fs.writeFile(POINTS_DATA_FILE, JSON.stringify(pointsData, null, 2), (err) => {
+            if (err) log.error('[Points] Failed to save data:', err.message);
+        });
     } catch (e) {
         log.error('[Points] Failed to save data:', e.message);
     }
@@ -324,10 +328,11 @@ const SNAKE_COLORS = [
     '#6666FF', // Light Blue
     '#FFAA00', // Amber
 ];
-let colorIndex = 0;
-function getNextColor() {
-    const color = SNAKE_COLORS[colorIndex % SNAKE_COLORS.length];
-    colorIndex++;
+let colorIndex = 0; // global fallback, rooms use their own counter
+function getNextColor(room) {
+    const idx = room ? (room._colorIndex || 0) : colorIndex;
+    const color = SNAKE_COLORS[idx % SNAKE_COLORS.length];
+    if (room) { room._colorIndex = idx + 1; } else { colorIndex++; }
     return color;
 }
 
@@ -366,14 +371,14 @@ function rateLimit({ windowMs, max }) {
 }
 
 function requireAdminKey(req, res, next) {
-    if (!ADMIN_KEY) return next();
+    if (!ADMIN_KEY) return res.status(503).json({ error: 'admin_key_not_configured' });
     const key = req.header('x-api-key');
     if (!key || key !== ADMIN_KEY) return res.status(401).json({ error: 'unauthorized' });
     next();
 }
 
 function requireUploadKey(req, res, next) {
-    if (!BOT_UPLOAD_KEY) return next();
+    if (!BOT_UPLOAD_KEY) return res.status(503).json({ error: 'upload_key_not_configured' });
     const key = req.header('x-api-key');
     if (!key || key !== BOT_UPLOAD_KEY) return res.status(401).json({ error: 'unauthorized' });
     next();
@@ -517,8 +522,11 @@ function saveHistory(arenaId, winnerName, score) {
         winner: winnerName,
         score: score,
     });
-    // Keep all history (no limit)
-    fs.writeFileSync(HISTORY_FILE, JSON.stringify(matchHistory));
+    // Keep last 500 matches
+    if (matchHistory.length > 500) matchHistory = matchHistory.slice(0, 500);
+    fs.writeFile(HISTORY_FILE, JSON.stringify(matchHistory), (err) => {
+        if (err) log.error('[History] Failed to save:', err.message);
+    });
 }
 
 // --- Game Config ---
@@ -588,14 +596,24 @@ function startBotWorker(botId, overrideArenaId) {
         return;
     }
 
-    // Static Scan - Check for dangerous globals
+    // Static Scan - Check for dangerous globals (regex-based to resist string concatenation bypass)
     try {
         const content = fs.readFileSync(bot.scriptPath, 'utf8');
-        // Only block truly dangerous patterns (not common words like 'process' in comments)
-        const forbidden = ['require(', 'import ', 'child_process', '__dirname', '__filename'];
-        const risk = forbidden.find(k => content.includes(k));
+        const forbiddenPatterns = [
+            /\brequire\s*\(/,
+            /\bimport\s+/,
+            /child_process/,
+            /\b__dirname\b/,
+            /\b__filename\b/,
+            /\bprocess\s*\.\s*(env|exit|kill|mainModule|binding)/,
+            /\bglobal\s*\[/,
+            /\bglobal\s*\./,
+            /Function\s*\(/,
+            /\beval\s*\(/,
+        ];
+        const risk = forbiddenPatterns.find(p => p.test(content));
         if (risk) {
-            log.error(`[Worker] Bot ${botId} blocked. Found forbidden pattern: ${risk}`);
+            log.error(`[Worker] Bot ${botId} blocked. Matched forbidden pattern: ${risk}`);
             return;
         }
     } catch (e) {
@@ -731,11 +749,13 @@ class GameRoom {
         this.matchNumber = 0;         // Total match count for this room
         this.paidEntries = {};        // { matchNumber: [botId, ...] } - paid entries for specific matches
 
+        this._colorIndex = 0;
+        this._intervals = [];
         this.startLoops();
     }
 
     startLoops() {
-        setInterval(() => {
+        this._intervals.push(setInterval(() => {
             if (this.type === 'performance' && typeof performancePaused !== 'undefined' && performancePaused) {
                 // If paused, skip tick but maybe broadcast "paused" state?
                 // For MVP, just skip. Clients will see freeze.
@@ -747,9 +767,9 @@ class GameRoom {
             } else {
                 this.broadcastState();
             }
-        }, 125);
+        }, 125));
 
-        setInterval(() => {
+        this._intervals.push(setInterval(() => {
             if (this.gameState === 'PLAYING') {
                 if (this.matchTimeLeft > 0) {
                     this.matchTimeLeft--;
@@ -768,7 +788,12 @@ class GameRoom {
                     }
                 }
             }
-        }, 1000);
+        }, 1000));
+    }
+
+    destroy() {
+        this._intervals.forEach(id => clearInterval(id));
+        this._intervals = [];
     }
 
     sendEvent(type, payload = {}) {
@@ -1431,7 +1456,7 @@ class GameRoom {
         this.victoryPauseTimer = 0;
         this.lastSurvivorForVictory = null;
         this.matchTimeLeft = MATCH_DURATION;
-        colorIndex = 0;
+        this._colorIndex = 0;
         
         // Competitive: re-seed with normal bots if room is empty/low
         if (this.type === 'competitive') {
@@ -1443,7 +1468,7 @@ class GameRoom {
                     this.waitingRoom[id] = {
                         id,
                         name: 'Normal-' + id.slice(-3),
-                        color: getNextColor(),
+                        color: getNextColor(this),
                         ws: null,
                         botType: 'normal',
                         botId: null,
@@ -1684,7 +1709,7 @@ class GameRoom {
         this.waitingRoom[id] = {
             id: id,
             name: name,
-            color: getNextColor(),
+            color: getNextColor(this),
             ws: ws,
             botType,
             botId: data.botId || null,
@@ -1790,7 +1815,7 @@ function autoFillCompetitiveRoom(room) {
         room.waitingRoom[id] = {
             id,
             name: meta.name || 'Agent-' + botId.slice(-4),
-            color: getNextColor(),
+            color: getNextColor(room),
             ws: null,
             botType: 'agent',
             botId: botId,
@@ -1832,7 +1857,7 @@ function autoFillCompetitiveRoom(room) {
         room.waitingRoom[id] = {
             id,
             name: meta.name || 'Agent-' + botId.slice(-4),
-            color: getNextColor(),
+            color: getNextColor(room),
             ws: null,
             botType: 'agent',
             botId: botId,
@@ -1851,7 +1876,7 @@ function seedNormalBots(room, count = 10) {
         room.waitingRoom[id] = {
             id,
             name: 'Normal-' + id.slice(-3),
-            color: getNextColor(),
+            color: getNextColor(room),
             ws: null,
             botType: 'normal',
             botId: null,
@@ -2963,13 +2988,30 @@ app.get('/api/bet/winnings', async (req, res) => {
 });
 
 const handleBetPlace = (req, res) => {
-    const { matchId, botId, amount, bettor, arenaType } = req.body || {};
+    const { matchId, botId, amount, bettor, arenaType, signature, timestamp } = req.body || {};
 
     if (!matchId || !botId || !amount) {
         return res.status(400).json({ error: 'Missing required fields: matchId, botId, amount' });
     }
     if (!bettor || bettor === 'anonymous') {
         return res.status(400).json({ error: 'Please connect wallet to place a bet' });
+    }
+
+    // Verify bettor identity via signature (if provided)
+    if (signature && timestamp) {
+        const ts = parseInt(timestamp);
+        if (!ts || Math.abs(Date.now() - ts) > 5 * 60 * 1000) {
+            return res.status(401).json({ error: 'Signature expired' });
+        }
+        const message = `Snake Arena Bet\nAddress: ${bettor}\nMatch: ${matchId}\nBot: ${botId}\nAmount: ${amount}\nTimestamp: ${timestamp}`;
+        try {
+            const recovered = ethers.verifyMessage(message, signature);
+            if (recovered.toLowerCase() !== bettor.toLowerCase()) {
+                return res.status(401).json({ error: 'Invalid signature — bettor mismatch' });
+            }
+        } catch (e) {
+            return res.status(401).json({ error: 'Invalid signature' });
+        }
     }
 
     const betAmount = Math.floor(Number(amount));
@@ -3322,25 +3364,26 @@ async function verifyWalletSignature(address, message, signature) {
 }
 
 // Middleware: Require signature auth
-function requireSignatureAuth(req, res, next) {
+async function requireSignatureAuth(req, res, next) {
     const { address, signature, timestamp } = req.body || req.query || {};
-    
+
     if (!address || !signature) {
         return res.status(401).json({ error: 'auth_required', message: 'Wallet signature required' });
     }
-    
+
     // Check timestamp (prevent replay attacks) - 5 minute window
     const ts = parseInt(timestamp);
     if (!ts || Math.abs(Date.now() - ts) > 5 * 60 * 1000) {
         return res.status(401).json({ error: 'auth_expired', message: 'Signature expired' });
     }
-    
+
     // Verify signature
     const message = `SnakeArena Referral Auth\nAddress: ${address}\nTimestamp: ${timestamp}`;
-    if (!verifyWalletSignature(address, message, signature)) {
+    const isValid = await verifyWalletSignature(address, message, signature);
+    if (!isValid) {
         return res.status(401).json({ error: 'auth_invalid', message: 'Invalid signature' });
     }
-    
+
     req.authenticatedAddress = address.toLowerCase();
     next();
 }
