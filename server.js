@@ -226,6 +226,78 @@ function savePoints() {
 }
 loadPoints();
 
+// --- Airdrop Points System (accumulate-only, separate from betting balance) ---
+const AIRDROP_DATA_FILE = path.join(__dirname, 'data', 'airdrop-points.json');
+const CHECKIN_BASE = 10;
+const CHECKIN_STREAK_BONUS = 30; // day 7 bonus
+const MATCH_PARTICIPATE_POINTS = 5;
+const MATCH_PLACE_REWARDS = [50, 30, 20]; // 1st, 2nd, 3rd
+const BET_ACTIVITY_POINTS = 5;
+const BET_WIN_MULTIPLIER = 0.5;
+const REGISTER_BONUS = 200;
+const DAILY_MATCH_CAP = 20;
+const DAILY_BET_CAP = 50;
+
+let airdropPoints = {}; // { address: { total, checkin: { lastDate, streak }, history: [] } }
+
+function loadAirdropPoints() {
+    try {
+        if (fs.existsSync(AIRDROP_DATA_FILE)) {
+            airdropPoints = JSON.parse(fs.readFileSync(AIRDROP_DATA_FILE, 'utf8'));
+            log.info(`[Airdrop] Loaded ${Object.keys(airdropPoints).length} airdrop point records`);
+        }
+    } catch (e) {
+        log.error('[Airdrop] Failed to load data:', e.message);
+    }
+}
+
+function saveAirdropPoints() {
+    try {
+        const dataDir = path.dirname(AIRDROP_DATA_FILE);
+        if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+        fs.writeFile(AIRDROP_DATA_FILE, JSON.stringify(airdropPoints, null, 2), (err) => {
+            if (err) log.error('[Airdrop] Failed to save data:', err.message);
+        });
+    } catch (e) {
+        log.error('[Airdrop] Failed to save data:', e.message);
+    }
+}
+
+loadAirdropPoints();
+
+function ensureAirdropUser(address) {
+    if (!airdropPoints[address]) {
+        airdropPoints[address] = { total: 0, checkin: { lastDate: null, streak: 0 }, history: [] };
+    }
+    return airdropPoints[address];
+}
+
+function awardAirdropPoints(address, type, points, meta = {}) {
+    const addr = address.toLowerCase();
+    const user = ensureAirdropUser(addr);
+    user.total += points;
+    user.history.push({ type, points, ts: Date.now(), ...meta });
+    // Keep only last 100 history entries
+    if (user.history.length > 100) {
+        user.history = user.history.slice(-100);
+    }
+    saveAirdropPoints();
+    log.info(`[Airdrop] ${addr} +${points} (${type}) → total: ${user.total}`);
+}
+
+function getUTCDate() {
+    return new Date().toISOString().slice(0, 10);
+}
+
+function getDailyCount(address, typePrefix) {
+    const addr = address.toLowerCase();
+    const user = airdropPoints[addr];
+    if (!user) return 0;
+    const today = getUTCDate();
+    const startOfDay = new Date(today + 'T00:00:00Z').getTime();
+    return user.history.filter(h => h.type.startsWith(typePrefix) && h.ts >= startOfDay).length;
+}
+
 // Record referral registration
 function recordReferral(user, inviter, txHash, amount) {
     if (!user || !inviter || user.toLowerCase() === inviter.toLowerCase()) return false;
@@ -267,6 +339,12 @@ function recordReferral(user, inviter, txHash, amount) {
             timestamp: Date.now(),
             txHash: txHash
         });
+    }
+
+    // Also award airdrop points for referrals
+    awardAirdropPoints(inviterLower, 'referral_l1', REFERRAL_POINTS_L1, { from: userLower });
+    if (l2Inviter) {
+        awardAirdropPoints(l2Inviter, 'referral_l2', REFERRAL_POINTS_L2, { from: userLower, via: inviterLower });
     }
 
     saveReferralData();
@@ -1330,12 +1408,16 @@ class GameRoom {
         });
 
         // Settle bets using points (server-side pari-mutuel)
+        this._settledBets = []; // store for airdrop calculation
         if (placements.length > 0) {
             const matchId = this.currentMatchId;
             const arenaType = this.type;
             const winnerBotId = placements[0]; // 1st place bot name
             const bets = betRecords[matchId] || [];
             if (bets.length > 0) {
+                // Save all bets for airdrop points (before cleanup)
+                this._settledBets = bets.map(b => ({ ...b, winnings: 0 }));
+
                 const totalPool = bets.reduce((s, b) => s + b.amount, 0);
                 const winnerBets = bets.filter(b => b.botId === winnerBotId);
                 const winnerPool = winnerBets.reduce((s, b) => s + b.amount, 0);
@@ -1354,6 +1436,9 @@ class GameRoom {
                                 matchId, amount: winnings, type: 'bet_win', botId: winnerBotId, ts: Date.now()
                             });
                             totalAwarded += winnings;
+                            // Tag settled bet with winnings for airdrop calculation
+                            const settledBet = this._settledBets.find(sb => sb.bettor === addr && sb.botId === winnerBotId);
+                            if (settledBet) settledBet.winnings = winnings;
                         }
                     }
                     if (totalAwarded > 0) {
@@ -1367,6 +1452,57 @@ class GameRoom {
                 // Clean up settled records
                 delete betRecords[matchId];
                 delete betPools[matchId];
+            }
+        }
+
+        // --- Airdrop points: match participation & placements ---
+        const matchId = this.currentMatchId;
+        const arenaType = this.type;
+        const allBotsInMatch = allPlayers.filter(p => p.botId);
+        const ownersAwarded = new Set();
+        for (const p of allBotsInMatch) {
+            const ownerAddr = botRegistry[p.botId]?.owner;
+            if (!ownerAddr || ownerAddr === 'unknown' || ownersAwarded.has(ownerAddr)) continue;
+            ownersAwarded.add(ownerAddr);
+            // Check daily match cap
+            if (getDailyCount(ownerAddr, 'match_') < DAILY_MATCH_CAP) {
+                awardAirdropPoints(ownerAddr, 'match_participate', MATCH_PARTICIPATE_POINTS, { matchId, botId: p.botId });
+            }
+        }
+
+        // Placement rewards (only performance/competitive)
+        if (arenaType === 'performance' || arenaType === 'competitive') {
+            for (let i = 0; i < Math.min(placements.length, 3); i++) {
+                const botId = placements[i];
+                const ownerAddr = botRegistry[botId]?.owner;
+                if (!ownerAddr || ownerAddr === 'unknown') continue;
+                awardAirdropPoints(ownerAddr, 'match_place', MATCH_PLACE_REWARDS[i], { matchId, botId, place: i + 1 });
+            }
+        }
+
+        // --- Airdrop points: bet activity & bet winnings ---
+        const settledBets = this._settledBets || [];
+        const bettorsAwarded = new Set();
+        for (const bet of settledBets) {
+            if (!bet.bettor || bet.bettor === 'anonymous') continue;
+            const addr = bet.bettor.toLowerCase();
+            if (!bettorsAwarded.has(addr)) {
+                bettorsAwarded.add(addr);
+                if (getDailyCount(addr, 'bet_') < DAILY_BET_CAP) {
+                    awardAirdropPoints(addr, 'bet_activity', BET_ACTIVITY_POINTS, { matchId });
+                }
+            }
+        }
+        // Bet win airdrop bonus
+        for (const bet of settledBets) {
+            if (!bet.bettor || bet.bettor === 'anonymous' || !bet.winnings || bet.winnings <= 0) continue;
+            const addr = bet.bettor.toLowerCase();
+            const profit = bet.winnings - bet.amount;
+            if (profit > 0) {
+                const bonus = Math.floor(profit * BET_WIN_MULTIPLIER);
+                if (bonus > 0) {
+                    awardAirdropPoints(addr, 'bet_win', bonus, { matchId, winnings: bet.winnings });
+                }
             }
         }
     }
@@ -2319,6 +2455,16 @@ app.post('/api/bot/register', rateLimit({ windowMs: 60_000, max: 10 }), async (r
         }
     }
 
+    // Award airdrop registration bonus (once per wallet)
+    if (ownerAddr && ownerAddr !== 'unknown') {
+        const adUser = airdropPoints[ownerAddr];
+        const alreadyClaimed = adUser && adUser.history.some(h => h.type === 'register');
+        if (!alreadyClaimed) {
+            awardAirdropPoints(ownerAddr, 'register', REGISTER_BONUS, {});
+            log.important(`[Airdrop] Registration bonus ${REGISTER_BONUS} awarded to ${ownerAddr}`);
+        }
+    }
+
     // auto-assign room on register (performance by default) — only for new bots
     if (!isExisting) {
         const room = assignRoomForJoin({ name: botRegistry[id].name, botType: botRegistry[id].botType, botPrice: botRegistry[id].price || 0, arenaType: 'performance' });
@@ -3114,6 +3260,145 @@ app.get('/api/points/leaderboard', (req, res) => {
             points: data.points
         }));
     res.json(sorted);
+});
+
+// --- Airdrop Points APIs ---
+
+// Daily check-in (requires wallet signature)
+app.post('/api/airdrop/checkin', async (req, res) => {
+    const { address, signature, timestamp } = req.body || {};
+    if (!address || !signature || !timestamp) {
+        return res.status(400).json({ error: 'missing_params', message: 'address, signature, timestamp required' });
+    }
+
+    // Verify signature
+    const ts = parseInt(timestamp);
+    if (!ts || Math.abs(Date.now() - ts) > 5 * 60 * 1000) {
+        return res.status(401).json({ error: 'auth_expired', message: 'Signature expired' });
+    }
+    const message = `SnakeArena Checkin\nAddress: ${address}\nTimestamp: ${timestamp}`;
+    const isValid = await verifyWalletSignature(address, message, signature);
+    if (!isValid) {
+        return res.status(401).json({ error: 'auth_invalid', message: 'Invalid signature' });
+    }
+
+    const addr = address.toLowerCase();
+    const user = ensureAirdropUser(addr);
+    const today = getUTCDate();
+
+    // Already checked in today?
+    if (user.checkin.lastDate === today) {
+        return res.status(400).json({ error: 'already_checked_in', message: 'Already checked in today', streak: user.checkin.streak, nextCheckin: today + 'T24:00:00Z' });
+    }
+
+    // Calculate streak
+    const yesterday = new Date(new Date(today + 'T00:00:00Z').getTime() - 86400000).toISOString().slice(0, 10);
+    if (user.checkin.lastDate === yesterday) {
+        user.checkin.streak += 1;
+    } else {
+        user.checkin.streak = 1;
+    }
+    user.checkin.lastDate = today;
+
+    // Calculate points: base 10, streak bonus on day 7
+    let points = CHECKIN_BASE;
+    if (user.checkin.streak >= 7) {
+        points = CHECKIN_STREAK_BONUS;
+        user.checkin.streak = 0; // reset after 7-day bonus
+    }
+
+    awardAirdropPoints(addr, 'checkin', points, { streak: user.checkin.streak || 7 });
+
+    res.json({
+        ok: true,
+        points,
+        streak: user.checkin.streak,
+        total: user.total,
+        message: points === CHECKIN_STREAK_BONUS ? '7-day streak bonus!' : `Day ${user.checkin.streak} check-in`
+    });
+});
+
+// Get my airdrop points
+app.get('/api/airdrop/my', (req, res) => {
+    const { address } = req.query;
+    if (!address) return res.status(400).json({ error: 'missing address' });
+    const addr = address.toLowerCase();
+    const user = airdropPoints[addr] || { total: 0, checkin: { lastDate: null, streak: 0 }, history: [] };
+
+    // Include rank
+    const sorted = Object.entries(airdropPoints)
+        .sort(([, a], [, b]) => b.total - a.total);
+    const rank = sorted.findIndex(([a]) => a === addr) + 1;
+
+    const today = getUTCDate();
+
+    res.json({
+        address: addr,
+        total: user.total,
+        rank: rank > 0 ? rank : null,
+        checkin: {
+            lastDate: user.checkin.lastDate,
+            streak: user.checkin.streak,
+            canCheckin: user.checkin.lastDate !== today
+        },
+        history: (user.history || []).slice(-30).reverse()
+    });
+});
+
+// Airdrop leaderboard
+app.get('/api/airdrop/leaderboard', (req, res) => {
+    const sorted = Object.entries(airdropPoints)
+        .sort(([, a], [, b]) => b.total - a.total)
+        .slice(0, 50)
+        .map(([address, data], idx) => ({
+            rank: idx + 1,
+            address,
+            total: data.total
+        }));
+    res.json(sorted);
+});
+
+// Claim registration bonus (requires wallet signature)
+app.post('/api/airdrop/claim-register', async (req, res) => {
+    const { address, signature, timestamp } = req.body || {};
+    if (!address || !signature || !timestamp) {
+        return res.status(400).json({ error: 'missing_params', message: 'address, signature, timestamp required' });
+    }
+
+    // Verify signature
+    const ts = parseInt(timestamp);
+    if (!ts || Math.abs(Date.now() - ts) > 5 * 60 * 1000) {
+        return res.status(401).json({ error: 'auth_expired', message: 'Signature expired' });
+    }
+    const message = `SnakeArena ClaimRegister\nAddress: ${address}\nTimestamp: ${timestamp}`;
+    const isValid = await verifyWalletSignature(address, message, signature);
+    if (!isValid) {
+        return res.status(401).json({ error: 'auth_invalid', message: 'Invalid signature' });
+    }
+
+    const addr = address.toLowerCase();
+
+    // Check if already claimed
+    const user = airdropPoints[addr];
+    if (user && user.history.some(h => h.type === 'register')) {
+        return res.status(400).json({ error: 'already_claimed', message: 'Registration bonus already claimed' });
+    }
+
+    // Check if user owns any bots (must have registered a bot)
+    const ownsBots = Object.values(botRegistry).some(b => (b.owner || '').toLowerCase() === addr);
+    if (!ownsBots) {
+        return res.status(400).json({ error: 'no_bots', message: 'Register a bot first to claim the bonus' });
+    }
+
+    awardAirdropPoints(addr, 'register', REGISTER_BONUS, {});
+    log.important(`[Airdrop] Registration bonus ${REGISTER_BONUS} claimed by ${addr}`);
+
+    res.json({
+        ok: true,
+        points: REGISTER_BONUS,
+        total: airdropPoints[addr].total,
+        message: `Registration bonus of ${REGISTER_BONUS} airdrop points claimed!`
+    });
 });
 
 // Replay APIs
