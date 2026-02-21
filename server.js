@@ -17,7 +17,8 @@ const CONTRACTS = {
     rewardDistributor: process.env.REWARD_DISTRIBUTOR_CONTRACT || '0xB354e3062b493466da0c1898Ede5aabF56279046',
     pariMutuel: process.env.PARIMUTUEL_CONTRACT || '0x1fDDd7CC864F85B20F1EF27221B5DD6C5Ffe413d',
     snakeBotNFT: process.env.NFT_CONTRACT || '0xF269b84543041EA350921E3e3A2Da0B14B85453C',
-    referralRewards: process.env.REFERRAL_CONTRACT || '0xfAA055B73D0CbE3E114152aE38f5E76a09F6524F'
+    referralRewards: process.env.REFERRAL_CONTRACT || '0xfAA055B73D0CbE3E114152aE38f5E76a09F6524F',
+    botMarketplace: process.env.BOT_MARKETPLACE_CONTRACT || '0x3088D308148B1FE6BE61770E2Bb78B41852Db4fC'
 };
 
 // Backend wallet for creating bots on-chain
@@ -94,12 +95,25 @@ const PARI_MUTUEL_ABI = [
     "event MatchSettled(uint256 indexed matchId, bytes32[] winners, uint256 totalPool, uint256 platformRake, uint256 botRewards)"
 ];
 
+const BOT_MARKETPLACE_ABI = [
+    "function list(uint256 tokenId, uint256 price) external",
+    "function buy(uint256 tokenId) external payable",
+    "function cancel(uint256 tokenId) external",
+    "function getActiveListings() external view returns (uint256[] memory tokenIds, address[] memory sellers, uint256[] memory prices)",
+    "function listings(uint256) external view returns (address seller, uint256 price)",
+    "function feePercent() external view returns (uint256)",
+    "event Listed(uint256 indexed tokenId, address indexed seller, uint256 price)",
+    "event Sold(uint256 indexed tokenId, address indexed seller, address indexed buyer, uint256 price)",
+    "event Cancelled(uint256 indexed tokenId, address indexed seller)"
+];
+
 // Initialize contracts
 let botRegistryContract = null;
 let rewardDistributorContract = null;
 let snakeBotNFTContract = null;
 let referralRewardsContract = null;
 let pariMutuelContract = null;
+let botMarketplaceContract = null;
 
 function initContracts() {
     if (backendWallet && CONTRACTS.botRegistry !== '0x0000000000000000000000000000000000000000') {
@@ -108,7 +122,10 @@ function initContracts() {
         snakeBotNFTContract = new ethers.Contract(CONTRACTS.snakeBotNFT, SNAKE_BOT_NFT_ABI, backendWallet);
         referralRewardsContract = new ethers.Contract(CONTRACTS.referralRewards, REFERRAL_REWARDS_ABI, provider);
         pariMutuelContract = new ethers.Contract(CONTRACTS.pariMutuel, PARI_MUTUEL_ABI, backendWallet);
-        log.important(`[Blockchain] Contracts initialized. Registry: ${CONTRACTS.botRegistry}, NFT: ${CONTRACTS.snakeBotNFT}, PariMutuel: ${CONTRACTS.pariMutuel}`);
+        if (CONTRACTS.botMarketplace !== '0x0000000000000000000000000000000000000000') {
+            botMarketplaceContract = new ethers.Contract(CONTRACTS.botMarketplace, BOT_MARKETPLACE_ABI, provider);
+        }
+        log.important(`[Blockchain] Contracts initialized. Registry: ${CONTRACTS.botRegistry}, NFT: ${CONTRACTS.snakeBotNFT}, PariMutuel: ${CONTRACTS.pariMutuel}, Marketplace: ${CONTRACTS.botMarketplace}`);
 
         // Poll for BotRegistered events every 30s (reliable on public RPC, no filter expiry issues)
         let lastCheckedBlock = null;
@@ -2676,6 +2693,36 @@ app.post('/api/bot/edit-token', rateLimit({ windowMs: 60_000, max: 20 }), async 
     }
 });
 
+// GET bot code for editing (requires valid edit token)
+app.get('/api/bot/:botId/code', (req, res) => {
+    try {
+        const { botId } = req.params;
+        const token = req.headers['x-edit-token'];
+        if (!token) {
+            return res.status(401).json({ error: 'auth_required', message: 'x-edit-token header required' });
+        }
+        const tokenData = editTokens.get(token);
+        if (!tokenData) {
+            return res.status(403).json({ error: 'invalid_token', message: 'Invalid edit token' });
+        }
+        if (tokenData.botId !== botId) {
+            return res.status(403).json({ error: 'token_bot_mismatch', message: 'Token is for a different bot' });
+        }
+        if (tokenData.expires < Date.now()) {
+            editTokens.delete(token);
+            return res.status(403).json({ error: 'token_expired', message: 'Edit token expired' });
+        }
+        const bot = botRegistry[botId];
+        if (!bot || !bot.scriptPath) {
+            return res.status(404).json({ error: 'no_code', message: 'Bot has no script file' });
+        }
+        const code = fs.readFileSync(bot.scriptPath, 'utf8');
+        res.json({ code });
+    } catch (e) {
+        res.status(500).json({ error: 'server_error', message: e.message });
+    }
+});
+
 // Look up numeric matchId by displayMatchId (e.g. "P2" → 5)
 app.get('/api/match/by-display-id', (req, res) => {
     const { id } = req.query;
@@ -3085,6 +3132,43 @@ app.post('/api/bot/claim', async (req, res) => {
         name: bot.name,
         owner: address.toLowerCase()
     });
+});
+
+// Claim bot ownership after NFT marketplace purchase — verifies on-chain NFT ownership
+app.post('/api/bot/claim-nft', async (req, res) => {
+    const { botId, address } = req.body;
+
+    if (!botId || !address) {
+        return res.status(400).json({ error: 'Missing botId or address' });
+    }
+
+    if (!snakeBotNFTContract) {
+        return res.status(503).json({ error: 'nft_contract_not_initialized' });
+    }
+
+    try {
+        // Verify on-chain: check that address actually owns the NFT for this botId
+        const botIdHex = ethers.encodeBytes32String(botId);
+        const tokenId = await snakeBotNFTContract.botToTokenId(botIdHex);
+        if (tokenId === 0n) {
+            return res.status(404).json({ error: 'no_nft', message: 'No NFT found for this bot' });
+        }
+        const nftOwner = await snakeBotNFTContract.ownerOf(tokenId);
+        if (nftOwner.toLowerCase() !== address.toLowerCase()) {
+            return res.status(403).json({ error: 'not_nft_owner', message: 'Address does not own this NFT on-chain' });
+        }
+
+        // Update local registry
+        if (botRegistry[botId]) {
+            botRegistry[botId].owner = address.toLowerCase();
+            saveBotRegistry();
+        }
+
+        res.json({ ok: true, botId, owner: address.toLowerCase() });
+    } catch (e) {
+        log.error('[API] /api/bot/claim-nft error:', e.message);
+        res.status(500).json({ error: 'verification_failed', message: e.message });
+    }
 });
 
 // --- Betting ---
@@ -3547,26 +3631,59 @@ app.get('/api/user/onchain-bots', async (req, res) => {
     }
 });
 
-// Get marketplace listings
+// Get marketplace listings — reads from BotMarketplace escrow contract, falls back to BotRegistry
 app.get('/api/marketplace/listings', async (req, res) => {
     try {
+        // Try BotMarketplace contract first (NFT escrow)
+        if (botMarketplaceContract && snakeBotNFTContract) {
+            const [tokenIds, sellers, prices] = await botMarketplaceContract.getActiveListings();
+            const formatted = await Promise.all(tokenIds.map(async (tid, i) => {
+                const tokenId = Number(tid);
+                let botId = '';
+                let botName = '';
+                let matchesPlayed = 0;
+                try {
+                    const botIdBytes = await snakeBotNFTContract.tokenIdToBot(tid);
+                    botId = ethers.decodeBytes32String(botIdBytes).replace(/\0/g, '');
+                    // Look up local info
+                    const local = botRegistry[botId];
+                    if (local) {
+                        botName = local.name || botId;
+                        matchesPlayed = local.matchesPlayed || 0;
+                    } else {
+                        botName = botId;
+                    }
+                } catch (_e) {}
+                return {
+                    tokenId,
+                    botId,
+                    botName,
+                    seller: sellers[i],
+                    matchesPlayed,
+                    price: ethers.formatEther(prices[i]),
+                    priceWei: prices[i].toString(),
+                };
+            }));
+            return res.json({ listings: formatted, source: 'marketplace' });
+        }
+
+        // Fallback: BotRegistry.getBotsForSale (legacy)
         const { offset = 0, limit = 20 } = req.query;
         if (!botRegistryContract) {
             return res.status(503).json({ error: 'contracts_not_initialized' });
         }
-        
         const listings = await botRegistryContract.getBotsForSale(offset, limit);
         const formatted = listings.map(bot => ({
             botId: ethers.decodeBytes32String(bot.botId).replace(/\0/g, ''),
             botName: bot.botName,
-            owner: bot.owner,
+            seller: bot.owner,
             registered: bot.registered,
             matchesPlayed: Number(bot.matchesPlayed),
             totalEarnings: ethers.formatEther(bot.totalEarnings),
             price: ethers.formatEther(bot.salePrice),
             priceWei: bot.salePrice.toString()
         }));
-        res.json({ listings: formatted });
+        res.json({ listings: formatted, source: 'registry' });
     } catch (e) {
         log.error('[API] /api/marketplace/listings error:', e.message);
         res.status(500).json({ error: 'query_failed', message: e.message });
