@@ -1,23 +1,23 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ConnectButton } from '@rainbow-me/rainbowkit';
-import { useAccount, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
+import { useAccount, useWriteContract, useWaitForTransactionReceipt, useConnect, useDisconnect, createConfig, http as wagmiHttp } from 'wagmi';
+import { injected, metaMask, coinbaseWallet } from 'wagmi/connectors';
 import { parseEther, parseUnits, stringToHex, padHex, createPublicClient, http } from 'viem';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { WagmiProvider } from 'wagmi';
 import { baseSepolia } from 'wagmi/chains';
-import { getDefaultConfig, RainbowKitProvider } from '@rainbow-me/rainbowkit';
-import '@rainbow-me/rainbowkit/styles.css';
 import './index.css';
 import { CONTRACTS, BOT_REGISTRY_ABI, PARI_MUTUEL_ABI, ERC20_ABI, BOT_MARKETPLACE_ABI, SNAKE_BOT_NFT_ABI } from './contracts';
 import foodSvgUrl from './assets/food.svg';
 
-// --- CONFIG ---
-const config = getDefaultConfig({
-  appName: 'Snake Arena',
-  // WalletConnect projectId — register at https://cloud.walletconnect.com
-  projectId: import.meta.env.VITE_WALLETCONNECT_PROJECT_ID || '7e5c5e3e3f5e5c5e3f5e5c5e3f5e5c5e',
+// --- CONFIG (multi-wallet, no WalletConnect dependency) ---
+const config = createConfig({
   chains: [baseSepolia],
-  ssr: false,
+  connectors: [
+    metaMask(),
+    coinbaseWallet({ appName: 'Snake Arena' }),
+    injected(),
+  ],
+  transports: { [baseSepolia.id]: wagmiHttp() },
 });
 
 const queryClient = new QueryClient();
@@ -78,6 +78,183 @@ function nameToBytes32(name: string): `0x${string}` {
 }
 
 // --- COMPONENTS ---
+
+// Wallet icons (inline SVG data URIs)
+const WALLET_ICONS: Record<string, string> = {
+  metaMask: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><rect width="40" height="40" rx="8" fill="#F6851B"/><text x="20" y="26" text-anchor="middle" font-size="20" fill="white">M</text></svg>'),
+  coinbaseWallet: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><rect width="40" height="40" rx="8" fill="#0052FF"/><text x="20" y="26" text-anchor="middle" font-size="20" fill="white">C</text></svg>'),
+  injected: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><rect width="40" height="40" rx="8" fill="#627EEA"/><text x="20" y="26" text-anchor="middle" font-size="20" fill="white">W</text></svg>'),
+};
+
+function getWalletIcon(id: string) {
+  if (id.toLowerCase().includes('metamask')) return WALLET_ICONS.metaMask;
+  if (id.toLowerCase().includes('coinbase')) return WALLET_ICONS.coinbaseWallet;
+  return WALLET_ICONS.injected;
+}
+
+function getWalletDisplayName(connector: { id: string; name: string }) {
+  if (connector.id.toLowerCase().includes('metamask') || connector.name.toLowerCase().includes('metamask')) return 'MetaMask';
+  if (connector.id.toLowerCase().includes('coinbase') || connector.name.toLowerCase().includes('coinbase')) return 'Coinbase Wallet';
+  if (connector.id === 'injected') return 'Browser Wallet';
+  return connector.name;
+}
+
+// Wallet connection button + modal selector
+function WalletButton() {
+  const { address, isConnected } = useAccount();
+  const { connect, connectors } = useConnect();
+  const { disconnect } = useDisconnect();
+  const [showModal, setShowModal] = useState(false);
+  const [showMenu, setShowMenu] = useState(false);
+
+  // De-duplicate connectors by display name
+  const uniqueConnectors = connectors.reduce<typeof connectors>((acc, c) => {
+    const name = getWalletDisplayName(c);
+    if (!acc.find(x => getWalletDisplayName(x) === name)) acc.push(c);
+    return acc;
+  }, []);
+
+  if (isConnected && address) {
+    return (
+      <div style={{ position: 'relative' }}>
+        <button
+          onClick={() => setShowMenu(!showMenu)}
+          style={{
+            padding: '6px 12px', fontSize: '0.8rem', borderRadius: '8px',
+            background: 'rgba(0,255,136,0.15)', color: 'var(--neon-green)',
+            border: '1px solid var(--neon-green)', cursor: 'pointer',
+            fontFamily: 'Orbitron, monospace', fontWeight: 'bold',
+            display: 'flex', alignItems: 'center', gap: '6px',
+          }}
+        >
+          <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--neon-green)', display: 'inline-block' }} />
+          {address.slice(0, 6)}...{address.slice(-4)}
+        </button>
+        {showMenu && (
+          <>
+            <div onClick={() => setShowMenu(false)} style={{ position: 'fixed', inset: 0, zIndex: 9998 }} />
+            <div style={{
+              position: 'absolute', top: '100%', right: 0, marginTop: 6,
+              background: '#0f0f25', border: '1px solid #2a2a4a', borderRadius: 10,
+              padding: 8, minWidth: 180, zIndex: 9999,
+              boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
+            }}>
+              <div style={{ padding: '6px 10px', fontSize: '0.75rem', color: 'var(--text-dim)', borderBottom: '1px solid #1b1b3b', marginBottom: 4 }}>
+                Base Sepolia
+              </div>
+              <button
+                onClick={() => { navigator.clipboard.writeText(address); setShowMenu(false); }}
+                style={{
+                  width: '100%', padding: '8px 10px', background: 'transparent', color: '#fff',
+                  border: 'none', cursor: 'pointer', fontFamily: 'Orbitron, monospace',
+                  fontSize: '0.75rem', textAlign: 'left', borderRadius: 6,
+                }}
+                onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.08)')}
+                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+              >
+                Copy Address
+              </button>
+              <button
+                onClick={() => { disconnect(); setShowMenu(false); }}
+                style={{
+                  width: '100%', padding: '8px 10px', background: 'transparent', color: '#ff4466',
+                  border: 'none', cursor: 'pointer', fontFamily: 'Orbitron, monospace',
+                  fontSize: '0.75rem', textAlign: 'left', borderRadius: 6,
+                }}
+                onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,0,68,0.1)')}
+                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+              >
+                Disconnect
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <button
+        onClick={() => setShowModal(true)}
+        style={{
+          padding: '8px 16px', fontSize: '0.85rem', borderRadius: '8px',
+          background: 'var(--neon-green)', color: '#000',
+          border: 'none', cursor: 'pointer',
+          fontFamily: 'Orbitron, monospace', fontWeight: 'bold',
+        }}
+      >
+        Connect Wallet
+      </button>
+      {showModal && (
+        <div
+          onClick={() => setShowModal(false)}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 99999,
+          }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              background: '#0f0f25', border: '1px solid #2a2a4a', borderRadius: 16,
+              padding: '24px', width: 340, maxWidth: '90vw',
+              boxShadow: '0 16px 64px rgba(0,0,0,0.8)',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+              <h3 style={{ margin: 0, fontSize: '1rem', color: '#fff' }}>Connect Wallet</h3>
+              <button
+                onClick={() => setShowModal(false)}
+                style={{
+                  background: 'transparent', border: 'none', color: '#888',
+                  fontSize: '1.2rem', cursor: 'pointer', padding: '4px 8px',
+                  width: 'auto', minWidth: 0,
+                }}
+              >
+                ✕
+              </button>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {uniqueConnectors.map(connector => (
+                <button
+                  key={connector.uid}
+                  onClick={() => {
+                    connect({ connector });
+                    setShowModal(false);
+                  }}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 12,
+                    padding: '12px 14px', borderRadius: 10,
+                    background: 'rgba(255,255,255,0.05)', border: '1px solid #2a2a4a',
+                    color: '#fff', cursor: 'pointer', fontFamily: 'Orbitron, monospace',
+                    fontSize: '0.85rem', fontWeight: 'bold', transition: 'all 0.15s',
+                    width: '100%',
+                  }}
+                  onMouseEnter={e => {
+                    e.currentTarget.style.background = 'rgba(0,255,136,0.1)';
+                    e.currentTarget.style.borderColor = 'var(--neon-green)';
+                  }}
+                  onMouseLeave={e => {
+                    e.currentTarget.style.background = 'rgba(255,255,255,0.05)';
+                    e.currentTarget.style.borderColor = '#2a2a4a';
+                  }}
+                >
+                  <img src={getWalletIcon(connector.id)} alt="" width={32} height={32} style={{ borderRadius: 6 }} />
+                  {getWalletDisplayName(connector)}
+                </button>
+              ))}
+            </div>
+            <p style={{ margin: '16px 0 0', fontSize: '0.7rem', color: 'var(--text-dim)', textAlign: 'center' }}>
+              Choose a wallet to connect to Snake Arena
+            </p>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
 
 // Issue 1: Bot Management with 5 slots, scrollable
 function BotManagement() {
@@ -402,7 +579,7 @@ function BotManagement() {
               </h3>
               <button
                 onClick={() => { if (!editBusy) { setEditBot(null); setEditCode(''); setEditToken(''); setEditStatus(''); } }}
-                style={{ background: '#333', color: '#aaa', border: 'none', borderRadius: '4px', padding: '4px 8px', cursor: 'pointer', fontSize: '0.8rem' }}
+                style={{ width: 'auto', minWidth: 0, margin: 0, background: '#333', color: '#aaa', border: 'none', borderRadius: '4px', padding: '4px 8px', cursor: 'pointer', fontSize: '0.8rem' }}
               >X</button>
             </div>
             {editStatus && (
@@ -426,14 +603,14 @@ function BotManagement() {
                   <button
                     onClick={handleEditSave}
                     disabled={editBusy}
-                    style={{ padding: '6px 16px', fontSize: '0.8rem', background: 'var(--neon-green)', color: '#000', fontWeight: 'bold' }}
+                    style={{ width: 'auto', minWidth: 0, margin: 0, padding: '6px 16px', fontSize: '0.8rem', background: 'var(--neon-green)', color: '#000', fontWeight: 'bold' }}
                   >
                     {editBusy ? 'Saving...' : 'Save'}
                   </button>
                   <button
                     onClick={() => { setEditBot(null); setEditCode(''); setEditToken(''); setEditStatus(''); }}
                     disabled={editBusy}
-                    style={{ padding: '6px 16px', fontSize: '0.8rem', background: '#333', color: '#aaa' }}
+                    style={{ width: 'auto', minWidth: 0, margin: 0, padding: '6px 16px', fontSize: '0.8rem', background: '#333', color: '#aaa' }}
                   >
                     Cancel
                   </button>
@@ -447,30 +624,40 @@ function BotManagement() {
       {/* Sell Modal */}
       {sellBot && (
         <div style={{
-          marginTop: '8px', padding: '10px', background: 'rgba(255,0,128,0.08)',
-          border: '1px solid rgba(255,0,128,0.3)', borderRadius: '6px',
-        }}>
-          <div style={{ fontSize: '0.8rem', color: 'var(--neon-pink)', marginBottom: '6px' }}>
-            Sell: <strong>{sellBot.name}</strong>
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.8)', zIndex: 1000,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}
+          onClick={(e) => { if (e.target === e.currentTarget && !sellBusy) { setSellBot(null); setSellPrice(''); setSellStatus(''); } }}
+        >
+          <div style={{
+            background: '#0d0d20', border: '1px solid var(--neon-pink)', borderRadius: '10px',
+            padding: '16px', width: '90%', maxWidth: '360px',
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+              <div style={{ fontSize: '0.9rem', color: 'var(--neon-pink)', fontWeight: 'bold' }}>
+                Sell: {sellBot.name}
+              </div>
+              <button onClick={() => { if (!sellBusy) { setSellBot(null); setSellPrice(''); setSellStatus(''); } }}
+                style={{ width: 'auto', minWidth: 0, margin: 0, background: '#333', color: '#aaa', border: 'none', borderRadius: '4px', padding: '4px 8px', cursor: 'pointer', fontSize: '0.8rem' }}>
+                X
+              </button>
+            </div>
+            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+              <input
+                placeholder="Price (ETH)"
+                value={sellPrice}
+                onChange={e => setSellPrice(e.target.value)}
+                type="number" min="0.001" step="0.001"
+                style={{ flex: 1, fontSize: '0.85rem', width: 'auto' }}
+              />
+              <button onClick={handleSell} disabled={sellBusy}
+                style={{ width: 'auto', minWidth: 0, margin: 0, padding: '6px 14px', fontSize: '0.8rem', background: 'var(--neon-pink)', color: '#fff', whiteSpace: 'nowrap', fontWeight: 'bold' }}>
+                {sellBusy ? '...' : 'List'}
+              </button>
+            </div>
+            {sellStatus && <div className="muted" style={{ marginTop: '8px', fontSize: '0.8rem' }}>{sellStatus}</div>}
           </div>
-          <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-            <input
-              placeholder="Price (ETH)"
-              value={sellPrice}
-              onChange={e => setSellPrice(e.target.value)}
-              type="number" min="0.001" step="0.001"
-              style={{ flex: 1, fontSize: '0.8rem' }}
-            />
-            <button onClick={handleSell} disabled={sellBusy}
-              style={{ padding: '4px 10px', fontSize: '0.7rem', background: 'var(--neon-pink)', color: '#fff', whiteSpace: 'nowrap' }}>
-              {sellBusy ? '...' : 'List'}
-            </button>
-            <button onClick={() => setSellBot(null)} disabled={sellBusy}
-              style={{ padding: '4px 8px', fontSize: '0.7rem', background: '#333', color: '#aaa' }}>
-              X
-            </button>
-          </div>
-          {sellStatus && <div className="muted" style={{ marginTop: '4px', fontSize: '0.75rem' }}>{sellStatus}</div>}
         </div>
       )}
 
@@ -520,7 +707,7 @@ function Prediction({ displayMatchId, epoch, arenaType }: { displayMatchId: stri
     } catch { return alert('查询比赛编号失败'); }
     if (isNaN(mid)) return alert('无法解析比赛编号');
     if (!botName) return alert('请输入机器人名称');
-    if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) return alert('请输入 USDC 下注金额');
+    if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) return alert('请输入 USDC 预测金额');
     if (!isConnected || !address) return alert('请先连接钱包');
 
     setBusy(true);
@@ -543,8 +730,8 @@ function Prediction({ displayMatchId, epoch, arenaType }: { displayMatchId: stri
         await publicClient.waitForTransactionReceipt({ hash: approveTxHash as `0x${string}` });
       }
 
-      // Step 2: Place bet on-chain
-      setStatus('2/2 链上下注...');
+      // Step 2: Place prediction on-chain
+      setStatus('2/2 链上预测...');
       const betTx = await writeContractAsync({
         address: CONTRACTS.pariMutuel as `0x${string}`,
         abi: PARI_MUTUEL_ABI,
@@ -559,7 +746,7 @@ function Prediction({ displayMatchId, epoch, arenaType }: { displayMatchId: stri
         body: JSON.stringify({ matchId: mid, botId: botName, amount, bettor: address, txHash: betTx, arenaType })
       });
 
-      setStatus(`✅ 下注成功！${amount} USDC 押 ${botName} 赢`);
+      setStatus(`✅ 预测成功！${amount} USDC 预测 ${botName} 赢`);
       setAmount('');
     } catch (e: any) {
       const msg = e?.shortMessage || e?.message || '交易失败';
@@ -574,7 +761,7 @@ function Prediction({ displayMatchId, epoch, arenaType }: { displayMatchId: stri
       <div className="panel-row"><span>当前比赛</span><span>{displayMatchId ? `Epoch ${epoch} #${displayMatchId}` : '--'}</span></div>
       <input placeholder="比赛编号 (如 P5, A3)" value={targetMatch} onChange={e => setTargetMatch(e.target.value)} />
       <input placeholder="机器人名称 (预测谁赢?)" value={botName} onChange={e => setBotName(e.target.value)} style={{ marginTop: '6px' }} />
-      <input placeholder="下注金额 (USDC)" value={amount} onChange={e => setAmount(e.target.value)} type="number" min="0.01" step="0.01" style={{ marginTop: '6px' }} />
+      <input placeholder="预测金额 (USDC)" value={amount} onChange={e => setAmount(e.target.value)} type="number" min="0.01" step="0.01" style={{ marginTop: '6px' }} />
       <div style={{ display: 'flex', gap: '4px', marginTop: '6px' }}>
         {['1', '5', '10'].map(v => (
           <button key={v} onClick={() => setAmount(v)} type="button"
@@ -584,7 +771,7 @@ function Prediction({ displayMatchId, epoch, arenaType }: { displayMatchId: stri
         ))}
       </div>
       <button onClick={handlePredict} disabled={busy} style={{ marginTop: '6px' }}>
-        {busy ? '⏳ ' + status : '🔮 USDC 下注'}
+        {busy ? '⏳ ' + status : '🔮 USDC 预测'}
       </button>
       {!busy && status && <div className="muted" style={{ marginTop: '6px' }}>{status}</div>}
     </div>
@@ -938,13 +1125,13 @@ const AIRDROP_TYPE_LABELS: Record<string, string> = {
   checkin: '每日签到',
   match_participate: '参赛奖励',
   match_place: '名次奖励',
-  bet_activity: '下注参与',
-  bet_win: '下注赢利',
+  bet_activity: '预测参与',
+  bet_win: '预测赢利',
   referral_l1: '邀请奖励 L1',
   referral_l2: '邀请奖励 L2',
 };
 
-// Full-page Points view — now shows Airdrop Points + Betting Balance
+// Full-page Points view — now shows Airdrop Points + Prediction Balance
 function PointsPage() {
   const { address } = useAccount();
   const [myAirdrop, setMyAirdrop] = useState<any>(null);
@@ -1053,17 +1240,17 @@ function PointsPage() {
               {checkinStatus && <div className="muted" style={{ marginTop: '6px' }}>{checkinStatus}</div>}
             </div>
 
-            {/* Betting Balance */}
+            {/* Prediction Balance */}
             {myBalance && (
               <div style={{ textAlign: 'center', padding: '8px', background: 'rgba(0,136,255,0.1)', borderRadius: '6px', marginBottom: '12px' }}>
-                <span className="muted">Betting Balance: </span>
+                <span className="muted">Prediction Balance: </span>
                 <span style={{ color: 'var(--neon-blue)', fontWeight: 'bold' }}>{myBalance.points || 0} pts</span>
               </div>
             )}
 
             {/* Points breakdown */}
             <div style={{ fontSize: '0.75rem', color: '#888', marginBottom: '8px', textAlign: 'center' }}>
-              Airdrop points are accumulate-only (never decrease). Betting balance is separate.
+              Airdrop points are accumulate-only (never decrease). Prediction balance is separate.
             </div>
 
             {myAirdrop.history && myAirdrop.history.length > 0 && (
@@ -1096,8 +1283,8 @@ function PointsPage() {
             <span>7-day streak bonus</span><span style={{ color: 'var(--neon-green)' }}>+30</span>
             <span>Bot participates in match</span><span style={{ color: 'var(--neon-green)' }}>+5</span>
             <span>1st / 2nd / 3rd place</span><span style={{ color: 'var(--neon-green)' }}>+50 / +30 / +20</span>
-            <span>Place a bet</span><span style={{ color: 'var(--neon-green)' }}>+5</span>
-            <span>Win a bet</span><span style={{ color: 'var(--neon-green)' }}>profit x 0.5</span>
+            <span>Place a prediction</span><span style={{ color: 'var(--neon-green)' }}>+amount USDC</span>
+            <span>Win a prediction</span><span style={{ color: 'var(--neon-green)' }}>profit x 0.5</span>
             <span>Invite L1 / L2</span><span style={{ color: 'var(--neon-green)' }}>+100 / +50</span>
           </div>
         </div>
@@ -1339,7 +1526,6 @@ function App() {
   return (
     <WagmiProvider config={config}>
       <QueryClientProvider client={queryClient}>
-        <RainbowKitProvider>
           <div className="app">
             <header className="top-tabs">
               <button className={`tab ${activePage === 'performance' ? 'active' : ''}`} onClick={() => switchPage('performance')}>🦀 表演场</button>
@@ -1348,7 +1534,7 @@ function App() {
               <button className={`tab ${activePage === 'points' ? 'active' : ''}`} onClick={() => switchPage('points')}>⭐ 积分</button>
               <button className={`tab ${activePage === 'marketplace' ? 'active' : ''}`} onClick={() => switchPage('marketplace')}>🏪 市场</button>
               <div style={{ marginLeft: 'auto' }}>
-                <ConnectButton showBalance={false} chainStatus="icon" accountStatus="avatar" />
+                <WalletButton />
               </div>
             </header>
 
@@ -1444,7 +1630,6 @@ function App() {
               </div>
             )}
           </div>
-        </RainbowKitProvider>
       </QueryClientProvider>
     </WagmiProvider>
   );

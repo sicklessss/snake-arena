@@ -103,6 +103,14 @@ canvas { border: 4px solid var(--neon-blue); box-shadow: 0 0 30px rgba(0, 204, 2
   overflow-y: auto;
 }
 
+/* Force RainbowKit modal above everything */
+[data-rk] div[role="dialog"],
+[data-rk] [aria-modal="true"],
+div[class*="ModalOverlay"],
+div[class*="modalOverlay"] {
+  z-index: 2147483647 !important;
+}
+
 /* Mobile layout: three pages */
 @media (max-width: 720px) {
   .leaderboard-page { padding: 12px; }

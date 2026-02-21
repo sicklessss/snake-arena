@@ -486,7 +486,14 @@ app.use((req, res, next) => {
     next();
 });
 
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public'), {
+    setHeaders: (res, filePath) => {
+        // Prevent browser from caching stale assets
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+    }
+}));
 app.use(bodyParser.json({ limit: '200kb' }));
 
 // API rate limiting
@@ -1506,7 +1513,8 @@ class GameRoom {
             if (!bettorsAwarded.has(addr)) {
                 bettorsAwarded.add(addr);
                 if (getDailyCount(addr, 'bet_') < DAILY_BET_CAP) {
-                    awardAirdropPoints(addr, 'bet_activity', BET_ACTIVITY_POINTS, { matchId });
+                    const betPts = Math.max(1, Math.floor(parseFloat(bet.amount) || 1));
+                    awardAirdropPoints(addr, 'bet_activity', betPts, { matchId });
                 }
             }
         }
@@ -2641,18 +2649,13 @@ app.post('/api/bot/register-unlimited', requireAdminKey, (req, res) => {
 app.post('/api/bot/edit-token', rateLimit({ windowMs: 60_000, max: 20 }), async (req, res) => {
     try {
         const { botId, address, signature, timestamp } = req.body || {};
-        if (!botId || !address || !signature || !timestamp) {
-            return res.status(400).json({ error: 'missing_params', message: 'botId, address, signature, timestamp required' });
+        if (!botId || !address || !signature) {
+            return res.status(400).json({ error: 'missing_params', message: 'botId, address, signature required' });
         }
 
-        // 1. Check timestamp freshness (within 5 minutes)
-        const ts = parseInt(timestamp);
-        if (isNaN(ts) || Math.abs(Date.now() - ts) > 5 * 60 * 1000) {
-            return res.status(400).json({ error: 'expired_timestamp', message: 'Timestamp must be within 5 minutes' });
-        }
-
-        // 2. Verify wallet signature
-        const message = `Snake Arena Edit: ${botId} at ${timestamp}`;
+        // 1. Verify wallet signature (timestamp included in message for uniqueness)
+        const ts = timestamp || Date.now().toString();
+        const message = `Snake Arena Edit: ${botId} at ${ts}`;
         let recovered;
         try {
             recovered = ethers.verifyMessage(message, signature);
