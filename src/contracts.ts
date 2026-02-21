@@ -2,12 +2,14 @@
 export const CONTRACTS = {
   botRegistry: '0x25DEA1962A7A3a5fC4E1956E05b5eADE609E0800',
   rewardDistributor: '0xB354e3062b493466da0c1898Ede5aabF56279046',
-  pariMutuel: '0x1fDDd7CC864F85B20F1EF27221B5DD6C5Ffe413d',
+  pariMutuel: '0x35c8660C448Ccc5eef716E5c4aa2455c82B843C7',
   snakeBotNFT: '0xF269b84543041EA350921E3e3A2Da0B14B85453C',
   // BotMarketplace — NFT escrow marketplace (deploy and update address)
   botMarketplace: '0x3088D308148B1FE6BE61770E2Bb78B41852Db4fC',
   // USDC on Base Sepolia
   usdc: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+  // ReferralRewards contract
+  referralRewards: '0xfAA055B73D0CbE3E114152aE38f5E76a09F6524F',
 };
 
 // BotRegistry ABI
@@ -30,7 +32,13 @@ export const REWARD_DISTRIBUTOR_ABI = [
 // SnakeArenaPariMutuel ABI (USDC-based prediction)
 export const PARI_MUTUEL_ABI = [
   { "inputs": [{ "internalType": "uint256", "name": "_matchId", "type": "uint256" }, { "internalType": "bytes32", "name": "_botId", "type": "bytes32" }, { "internalType": "uint256", "name": "_amount", "type": "uint256" }], "name": "placeBet", "outputs": [], "stateMutability": "nonpayable", "type": "function" },
-  { "inputs": [{ "internalType": "uint256", "name": "_matchId", "type": "uint256" }], "name": "claimWinnings", "outputs": [], "stateMutability": "nonpayable", "type": "function" }
+  { "inputs": [{ "internalType": "uint256", "name": "_matchId", "type": "uint256" }, { "internalType": "uint256", "name": "_startTime", "type": "uint256" }], "name": "createMatch", "outputs": [], "stateMutability": "nonpayable", "type": "function" },
+  { "inputs": [{ "internalType": "uint256", "name": "_matchId", "type": "uint256" }, { "internalType": "bytes32[]", "name": "_winners", "type": "bytes32[]" }], "name": "settleMatch", "outputs": [], "stateMutability": "nonpayable", "type": "function" },
+  { "inputs": [{ "internalType": "uint256", "name": "_matchId", "type": "uint256" }], "name": "claimWinnings", "outputs": [], "stateMutability": "nonpayable", "type": "function" },
+  { "inputs": [{ "internalType": "uint256", "name": "_matchId", "type": "uint256" }], "name": "claimRefund", "outputs": [], "stateMutability": "nonpayable", "type": "function" },
+  { "inputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }], "name": "matches", "outputs": [{ "internalType": "uint256", "name": "matchId", "type": "uint256" }, { "internalType": "uint256", "name": "startTime", "type": "uint256" }, { "internalType": "uint256", "name": "endTime", "type": "uint256" }, { "internalType": "uint256", "name": "totalPool", "type": "uint256" }, { "internalType": "bool", "name": "settled", "type": "bool" }, { "internalType": "bool", "name": "cancelled", "type": "bool" }], "stateMutability": "view", "type": "function" },
+  { "inputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }, { "internalType": "bytes32", "name": "", "type": "bytes32" }], "name": "botTotalBets", "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }], "stateMutability": "view", "type": "function" },
+  { "inputs": [{ "internalType": "uint256", "name": "_matchId", "type": "uint256" }, { "internalType": "bytes32", "name": "_botId", "type": "bytes32" }], "name": "getCurrentOdds", "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }], "stateMutability": "view", "type": "function" },
 ] as const;
 
 // ERC20 ABI (for USDC approve)
@@ -61,4 +69,11 @@ export const SNAKE_BOT_NFT_ABI = [
   { "inputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }], "name": "tokenIdToBot", "outputs": [{ "internalType": "bytes32", "name": "", "type": "bytes32" }], "stateMutability": "view", "type": "function" },
   { "inputs": [{ "internalType": "address", "name": "_owner", "type": "address" }], "name": "getBotsByOwner", "outputs": [{ "internalType": "bytes32[]", "name": "", "type": "bytes32[]" }], "stateMutability": "view", "type": "function" },
   { "inputs": [{ "internalType": "uint256", "name": "tokenId", "type": "uint256" }], "name": "ownerOf", "outputs": [{ "internalType": "address", "name": "", "type": "address" }], "stateMutability": "view", "type": "function" },
+] as const;
+
+// ReferralRewards ABI
+export const REFERRAL_REWARDS_ABI = [
+  { "inputs": [{ "internalType": "uint256", "name": "amount", "type": "uint256" }, { "internalType": "uint256", "name": "nonce", "type": "uint256" }, { "internalType": "bytes", "name": "signature", "type": "bytes" }], "name": "claim", "outputs": [], "stateMutability": "nonpayable", "type": "function" },
+  { "inputs": [{ "internalType": "address", "name": "user", "type": "address" }], "name": "getClaimed", "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }], "stateMutability": "view", "type": "function" },
+  { "inputs": [{ "internalType": "address", "name": "user", "type": "address" }], "name": "getNonce", "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }], "stateMutability": "view", "type": "function" },
 ] as const;

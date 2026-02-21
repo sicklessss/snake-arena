@@ -4,6 +4,7 @@ pragma solidity ^0.8.19;
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
 
 /**
  * @title BotMarketplace
@@ -12,9 +13,10 @@ import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
  *         Buyer pays   → NFT transferred to buyer, ETH to seller (minus fee).
  *         Seller cancels → NFT returned.
  */
-contract BotMarketplace is Ownable, ReentrancyGuard {
+contract BotMarketplace is Ownable, ReentrancyGuard, IERC721Receiver {
     IERC721 public nftContract;
     uint256 public feePercent = 250; // 2.5% in basis points
+    uint256 public accumulatedFees;
 
     struct Listing {
         address seller;
@@ -23,6 +25,7 @@ contract BotMarketplace is Ownable, ReentrancyGuard {
 
     mapping(uint256 => Listing) public listings; // tokenId => Listing
     uint256[] public activeTokenIds;
+    mapping(uint256 => uint256) private activeIndex; // tokenId => index in activeTokenIds (O(1) removal)
 
     event Listed(uint256 indexed tokenId, address indexed seller, uint256 price);
     event Sold(uint256 indexed tokenId, address indexed seller, address indexed buyer, uint256 price);
@@ -32,11 +35,16 @@ contract BotMarketplace is Ownable, ReentrancyGuard {
         nftContract = IERC721(_nftContract);
     }
 
+    /// @notice IERC721Receiver — accept NFT transfers
+    function onERC721Received(address, address, uint256, bytes calldata) external pure override returns (bytes4) {
+        return IERC721Receiver.onERC721Received.selector;
+    }
+
     /**
      * @notice List an NFT for sale. Caller must have approved this contract first.
      *         NFT is transferred into escrow (this contract).
      */
-    function list(uint256 tokenId, uint256 price) external {
+    function list(uint256 tokenId, uint256 price) external nonReentrant {
         require(price > 0, "Price must be > 0");
         require(nftContract.ownerOf(tokenId) == msg.sender, "Not NFT owner");
 
@@ -44,6 +52,7 @@ contract BotMarketplace is Ownable, ReentrancyGuard {
         nftContract.transferFrom(msg.sender, address(this), tokenId);
 
         listings[tokenId] = Listing(msg.sender, price);
+        activeIndex[tokenId] = activeTokenIds.length;
         activeTokenIds.push(tokenId);
 
         emit Listed(tokenId, msg.sender, price);
@@ -55,11 +64,12 @@ contract BotMarketplace is Ownable, ReentrancyGuard {
     function buy(uint256 tokenId) external payable nonReentrant {
         Listing memory item = listings[tokenId];
         require(item.price > 0, "Not listed");
-        require(msg.value >= item.price, "Insufficient payment");
+        require(msg.value == item.price, "Payment must equal price");
         require(item.seller != msg.sender, "Cannot buy own");
 
         uint256 fee = (item.price * feePercent) / 10000;
         uint256 sellerProceeds = item.price - fee;
+        accumulatedFees += fee;
 
         delete listings[tokenId];
         _removeFromActive(tokenId);
@@ -78,7 +88,7 @@ contract BotMarketplace is Ownable, ReentrancyGuard {
      * @notice Cancel a listing. Only the original seller can cancel.
      *         NFT is returned to the seller.
      */
-    function cancel(uint256 tokenId) external {
+    function cancel(uint256 tokenId) external nonReentrant {
         require(listings[tokenId].seller == msg.sender, "Not seller");
 
         delete listings[tokenId];
@@ -119,25 +129,27 @@ contract BotMarketplace is Ownable, ReentrancyGuard {
     }
 
     /**
-     * @notice Withdraw accumulated platform fees.
+     * @notice Withdraw only accumulated platform fees (not escrowed funds).
      */
     function withdrawFees() external onlyOwner {
-        uint256 balance = address(this).balance;
-        require(balance > 0, "No balance");
-        (bool ok, ) = payable(owner()).call{value: balance}("");
+        uint256 amount = accumulatedFees;
+        require(amount > 0, "No fees");
+        accumulatedFees = 0;
+        (bool ok, ) = payable(owner()).call{value: amount}("");
         require(ok, "Withdraw failed");
     }
 
     // --- Internal ---
 
     function _removeFromActive(uint256 tokenId) internal {
-        uint256 len = activeTokenIds.length;
-        for (uint256 i = 0; i < len; i++) {
-            if (activeTokenIds[i] == tokenId) {
-                activeTokenIds[i] = activeTokenIds[len - 1];
-                activeTokenIds.pop();
-                return;
-            }
+        uint256 idx = activeIndex[tokenId];
+        uint256 lastIdx = activeTokenIds.length - 1;
+        if (idx != lastIdx) {
+            uint256 lastTokenId = activeTokenIds[lastIdx];
+            activeTokenIds[idx] = lastTokenId;
+            activeIndex[lastTokenId] = idx;
         }
+        activeTokenIds.pop();
+        delete activeIndex[tokenId];
     }
 }

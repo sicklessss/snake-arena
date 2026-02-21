@@ -55,30 +55,38 @@ Snake Arena is a **real-time multiplayer snake battle royale**. Players and AI b
 
 ### Register + Upload (One Step) — No Auth Required ✅
 `POST /api/bot/upload`
-- Header: `Content-Type: text/javascript`
+- Header: `Content-Type: text/javascript` (must be text/javascript or application/javascript)
 - Body: JS code as text
-- Server scans for forbidden keywords (require/fs/process etc.)
+- Server scans for forbidden keywords (require/fs/process/Proxy/Reflect etc.)
 - **Auto-starts** the bot after upload
-- Rate limit: 10 requests/minute
+- Rate limit: 10 requests/minute, **10 new bots per IP per hour**
 
 **Example (curl):**
 ```bash
-curl -X POST 'http://107.174.228.72:3000/api/bot/upload' \
+curl -X POST 'http://107.174.228.72:3000/api/bot/upload?name=MyBot' \
   -H 'Content-Type: text/javascript' \
   --data-binary @my-bot.js
 ```
 
 Returns: `{ "ok": true, "botId": "bot_xxx", "message": "Bot uploaded and started successfully." }`
 
-### Update existing bot — No Auth Required ✅
+### Update existing bot — Requires Edit Token 🔒
 `POST /api/bot/upload?botId=bot_xxx`
-- Same as above, but updates existing bot script
+- Requires `x-edit-token` header (obtained via wallet signature)
 - Bot will **auto-restart** with new script
 
-**Example:**
+**Step 1: Get edit token**
 ```bash
-curl -X POST 'http://107.174.228.72:3000/api/bot/upload?botId=bot_abc123' \
+curl -X POST 'http://107.174.228.72:3000/api/bot/edit-token' \
+  -H 'Content-Type: application/json' \
+  -d '{"botId":"bot_xxx","address":"0xYourWallet","signature":"0x...","timestamp":1234567890}'
+```
+
+**Step 2: Upload with token**
+```bash
+curl -X POST 'http://107.174.228.72:3000/api/bot/upload?botId=bot_xxx' \
   -H 'Content-Type: text/javascript' \
+  -H 'x-edit-token: <token-from-step1>' \
   --data-binary @my-bot.js
 ```
 
@@ -425,17 +433,25 @@ Your bot runs in a **sandboxed environment**. The following are available:
 - `Math`, `JSON`, `Array`, `Object`, `Date` — Standard JS
 
 **Forbidden (blocked by static scan):**
-- `require(` — No module imports
-- `import ` — No ES6 imports
+- `require(`, `import ` — No module imports
 - `child_process` — No shell access
 - `__dirname`, `__filename` — No path access
 - `fs`, `net`, `http` — No I/O modules
+- `eval(`, `Function(` — No dynamic code execution
+- `Proxy(`, `Reflect.`, `Symbol.` — No metaprogramming
+- `WeakRef(`, `FinalizationRegistry(` — No weak references
+- `__proto__`, `constructor.constructor`, `getPrototypeOf` — No prototype escape
+
+**Sandbox restrictions:**
+- WebSocket can only connect to **localhost** (the game server)
+- `Promise` is available but frozen (no prototype tampering)
+- `SharedArrayBuffer`, `Atomics` are blocked
 
 **Tips:**
 1. Always handle `ws.on('close')` and `ws.on('error')`
 2. Use `process.exit()` to cleanly terminate
 3. Don't use infinite loops — respond to `update` messages
-4. Test locally before uploading
+4. Content-Type must be `text/javascript` or `application/javascript` (not `text/plain`)
 
 ---
 

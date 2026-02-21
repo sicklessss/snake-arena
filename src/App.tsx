@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useAccount, useWriteContract, useWaitForTransactionReceipt, useConnect, useDisconnect, createConfig, http as wagmiHttp } from 'wagmi';
+import { useAccount, useWriteContract, useWaitForTransactionReceipt, useConnect, useDisconnect, useSignMessage, useSendTransaction, createConfig, http as wagmiHttp } from 'wagmi';
 import { injected, metaMask, coinbaseWallet } from 'wagmi/connectors';
 import { parseEther, parseUnits, stringToHex, padHex, createPublicClient, http } from 'viem';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -74,7 +74,7 @@ const COMPETITIVE_RULES = `⚔️ 竞技场规则
 
 // Helper: encode bot name to bytes32
 function nameToBytes32(name: string): `0x${string}` {
-  return padHex(stringToHex(name, { size: 32 }), { size: 32 });
+  return stringToHex(name, { size: 32 });
 }
 
 // --- COMPONENTS ---
@@ -260,6 +260,7 @@ function WalletButton() {
 function BotManagement() {
   const { isConnected, address } = useAccount();
   const { writeContractAsync } = useWriteContract();
+  const { signMessageAsync } = useSignMessage();
   const [bots, setBots] = useState<any[]>([]);
   const [newName, setNewName] = useState('');
   const [regStatus, setRegStatus] = useState('');
@@ -274,11 +275,14 @@ function BotManagement() {
   const [editToken, setEditToken] = useState('');
   const [editStatus, setEditStatus] = useState('');
   const [editBusy, setEditBusy] = useState(false);
+  const miscTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const { writeContract, data: regHash, isPending: regPending, error: regError } = useWriteContract();
+  const [regHash, setRegHash] = useState<`0x${string}` | undefined>(undefined);
+  const [regPending, setRegPending] = useState(false);
+  const [regError, setRegError] = useState<Error | null>(null);
   const { isLoading: regConfirming, isSuccess: regConfirmed } = useWaitForTransactionReceipt({ hash: regHash });
 
-  const guideUrl = 'http://107.174.228.72:3000/SNAKE_GUIDE.md';
+  const guideUrl = window.location.origin + '/SNAKE_GUIDE.md';
 
   const handleCopy = () => {
     const doCopy = (text: string) => {
@@ -297,7 +301,7 @@ function BotManagement() {
     };
     doCopy(guideUrl).then(() => {
       setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      if (miscTimerRef.current) clearTimeout(miscTimerRef.current); miscTimerRef.current = setTimeout(() => setCopied(false), 2000);
     });
   };
 
@@ -312,12 +316,7 @@ function BotManagement() {
     try {
       const timestamp = Date.now().toString();
       const message = `Snake Arena Edit: ${bot.botId} at ${timestamp}`;
-      const provider = (window as any).ethereum;
-      if (!provider) { setEditStatus('No wallet found'); setEditBusy(false); return; }
-      const { BrowserProvider } = await import('ethers');
-      const ethProvider = new BrowserProvider(provider);
-      const signer = await ethProvider.getSigner();
-      const signature = await signer.signMessage(message);
+      const signature = await signMessageAsync({ message });
 
       setEditStatus('Verifying NFT ownership...');
       const res = await fetch('/api/bot/edit-token', {
@@ -370,7 +369,7 @@ function BotManagement() {
       const data = await res.json();
       if (res.ok && data.ok) {
         setEditStatus('Saved! Bot restarting...');
-        setTimeout(() => { setEditBot(null); setEditCode(''); setEditToken(''); setEditStatus(''); }, 1500);
+        if (miscTimerRef.current) clearTimeout(miscTimerRef.current); miscTimerRef.current = setTimeout(() => { setEditBot(null); setEditCode(''); setEditToken(''); setEditStatus(''); }, 1500);
       } else {
         setEditStatus(data.message || data.error || 'Save failed');
       }
@@ -393,7 +392,7 @@ function BotManagement() {
       } catch (e) { console.error(e); }
     };
     fetchBots();
-    const t = setInterval(fetchBots, 10000);
+    const t = setInterval(fetchBots, 20000);
     return () => clearInterval(t);
   }, [address]);
 
@@ -422,13 +421,32 @@ function BotManagement() {
 
       setRegStatus('Sign on-chain registration (0.01 ETH)...');
       const botId32 = nameToBytes32(data.id);
-      writeContract({
-        address: CONTRACTS.botRegistry as `0x${string}`,
-        abi: BOT_REGISTRY_ABI,
-        functionName: 'registerBot',
-        args: [botId32, '0x0000000000000000000000000000000000000000' as `0x${string}`],
-        value: parseEther('0.01'),
-      });
+      setRegPending(true);
+      setRegError(null);
+      try {
+        const hash = await writeContractAsync({
+          address: CONTRACTS.botRegistry as `0x${string}`,
+          abi: BOT_REGISTRY_ABI,
+          functionName: 'registerBot',
+          args: [botId32, '0x0000000000000000000000000000000000000000' as `0x${string}`],
+          value: parseEther('0.01'),
+        });
+        setRegHash(hash as `0x${string}`);
+      } catch (e: any) {
+        setRegError(e);
+        // Extract revert reason for better error message
+        const reason = e?.cause?.reason || e?.shortMessage || e?.message || '';
+        if (reason.includes('Max') && reason.includes('bots per user')) {
+          setRegStatus('⚠️ This wallet has reached the max bots limit on-chain. Use a different wallet.');
+        } else if (reason.includes('already registered')) {
+          setRegStatus('⚠️ This bot is already registered on-chain.');
+        } else if (reason.includes('user rejected') || reason.includes('denied')) {
+          setRegStatus('Transaction cancelled.');
+        } else {
+          setRegStatus('⚠️ Registration failed: ' + (e?.shortMessage || e?.message || 'Unknown error'));
+        }
+      }
+      setRegPending(false);
     } catch (e: any) {
       setRegStatus('Error: ' + e.message);
     }
@@ -479,7 +497,7 @@ function BotManagement() {
       await publicClient.waitForTransactionReceipt({ hash: listTx as `0x${string}` });
 
       setSellStatus('Listed! Your bot is now on the marketplace.');
-      setTimeout(() => { setSellBot(null); setSellPrice(''); setSellStatus(''); }, 2000);
+      if (miscTimerRef.current) clearTimeout(miscTimerRef.current); miscTimerRef.current = setTimeout(() => { setSellBot(null); setSellPrice(''); setSellStatus(''); }, 2000);
     } catch (e: any) {
       setSellStatus(e?.shortMessage || e?.message || 'Transaction failed');
     }
@@ -536,7 +554,7 @@ function BotManagement() {
             No bots yet — register one below
           </div>
         )}
-        {bots.map((bot, i) => (
+        {bots.filter(b => b.registered).map((bot, i) => (
           <div key={bot.botId || i} style={{
             display: 'flex', justifyContent: 'space-between', alignItems: 'center',
             padding: '6px 8px', marginBottom: '4px', borderRadius: '6px',
@@ -557,6 +575,11 @@ function BotManagement() {
             </div>
           </div>
         ))}
+        {bots.filter(b => !b.registered).length > 0 && (
+          <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginTop: '4px' }}>
+            {bots.filter(b => !b.registered).length} bot(s) pending on-chain registration...
+          </div>
+        )}
       </div>
 
       {/* Edit Modal */}
@@ -636,7 +659,7 @@ function BotManagement() {
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
               <div style={{ fontSize: '0.9rem', color: 'var(--neon-pink)', fontWeight: 'bold' }}>
-                Sell: {sellBot.name}
+                Sell: {sellBot.name || sellBot.botName || sellBot.botId}
               </div>
               <button onClick={() => { if (!sellBusy) { setSellBot(null); setSellPrice(''); setSellStatus(''); } }}
                 style={{ width: 'auto', minWidth: 0, margin: 0, background: '#333', color: '#aaa', border: 'none', borderRadius: '4px', padding: '4px 8px', cursor: 'pointer', fontSize: '0.8rem' }}>
@@ -645,12 +668,13 @@ function BotManagement() {
             </div>
             <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
               <input
-                placeholder="Price (ETH)"
+                placeholder="Price"
                 value={sellPrice}
                 onChange={e => setSellPrice(e.target.value)}
                 type="number" min="0.001" step="0.001"
                 style={{ flex: 1, fontSize: '0.85rem', width: 'auto' }}
               />
+              <span style={{ color: '#aaa', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>ETH</span>
               <button onClick={handleSell} disabled={sellBusy}
                 style={{ width: 'auto', minWidth: 0, margin: 0, padding: '6px 14px', fontSize: '0.8rem', background: 'var(--neon-pink)', color: '#fff', whiteSpace: 'nowrap', fontWeight: 'bold' }}>
                 {sellBusy ? '...' : 'List'}
@@ -681,7 +705,7 @@ function BotManagement() {
   );
 }
 
-// Prediction — server-side recording (on-chain PariMutuel disabled: contract reverts)
+// Prediction — on-chain USDC betting via SnakeArenaPariMutuel contract
 function Prediction({ displayMatchId, epoch, arenaType }: { displayMatchId: string | null; epoch: number; arenaType: 'performance' | 'competitive' }) {
   const { isConnected, address } = useAccount();
   const { writeContractAsync } = useWriteContract();
@@ -710,47 +734,76 @@ function Prediction({ displayMatchId, epoch, arenaType }: { displayMatchId: stri
     if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) return alert('请输入 USDC 预测金额');
     if (!isConnected || !address) return alert('请先连接钱包');
 
+    const botIdBytes32 = nameToBytes32(botName);
+    const usdcAmount = parseUnits(amount, 6); // USDC has 6 decimals
+
     setBusy(true);
     try {
-      // Convert bot name to bytes32
-      const botIdHex = padHex(stringToHex(botName, { size: 32 }), { size: 32 });
-      // USDC has 6 decimals
-      const usdcAmount = parseUnits(amount, 6);
-
-      // Step 1: Approve USDC
-      setStatus('1/2 授权 USDC...');
-      const approveTxHash = await writeContractAsync({
+      // Step 0: Check USDC balance
+      setStatus('检查 USDC 余额...');
+      const usdcBalance = await publicClient.readContract({
         address: CONTRACTS.usdc as `0x${string}`,
         abi: ERC20_ABI,
-        functionName: 'approve',
-        args: [CONTRACTS.pariMutuel as `0x${string}`, usdcAmount],
-      });
-      setStatus('1/2 等待授权确认...');
-      if (approveTxHash) {
-        await publicClient.waitForTransactionReceipt({ hash: approveTxHash as `0x${string}` });
+        functionName: 'balanceOf',
+        args: [address],
+      }) as bigint;
+
+      if (usdcBalance < usdcAmount) {
+        const balStr = (Number(usdcBalance) / 1e6).toFixed(2);
+        setStatus(`❌ USDC 余额不足：当前 ${balStr} USDC，需要 ${amount} USDC。请先在 Base Sepolia 获取测试 USDC`);
+        setBusy(false);
+        return;
       }
 
-      // Step 2: Place prediction on-chain
-      setStatus('2/2 链上预测...');
+      // Step 1: Check USDC allowance, approve if needed
+      setStatus('检查 USDC 授权...');
+      const currentAllowance = await publicClient.readContract({
+        address: CONTRACTS.usdc as `0x${string}`,
+        abi: ERC20_ABI,
+        functionName: 'allowance',
+        args: [address, CONTRACTS.pariMutuel as `0x${string}`],
+      }) as bigint;
+
+      if (currentAllowance < usdcAmount) {
+        setStatus('授权 USDC...');
+        const approveTx = await writeContractAsync({
+          address: CONTRACTS.usdc as `0x${string}`,
+          abi: ERC20_ABI,
+          functionName: 'approve',
+          args: [CONTRACTS.pariMutuel as `0x${string}`, usdcAmount],
+        });
+        await publicClient.waitForTransactionReceipt({ hash: approveTx as `0x${string}` });
+      }
+
+      // Step 2: Place bet on-chain (USDC, no ETH value)
+      setStatus('签名预测交易...');
       const betTx = await writeContractAsync({
         address: CONTRACTS.pariMutuel as `0x${string}`,
         abi: PARI_MUTUEL_ABI,
         functionName: 'placeBet',
-        args: [BigInt(mid), botIdHex, usdcAmount],
+        args: [BigInt(mid), botIdBytes32, usdcAmount],
       });
 
-      // Record on server too (for leaderboard / tracking)
-      await fetch('/api/bet/place', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ matchId: mid, botId: botName, amount, bettor: address, txHash: betTx, arenaType })
-      });
+      setStatus('链上确认中...');
+      await publicClient.waitForTransactionReceipt({ hash: betTx as `0x${string}` });
 
       setStatus(`✅ 预测成功！${amount} USDC 预测 ${botName} 赢`);
       setAmount('');
     } catch (e: any) {
       const msg = e?.shortMessage || e?.message || '交易失败';
-      setStatus('❌ ' + msg);
+      if (msg.includes('user rejected') || msg.includes('denied')) {
+        setStatus('已取消');
+      } else if (msg.includes('settled')) {
+        setStatus('❌ 该比赛已结算');
+      } else if (msg.includes('Betting closed')) {
+        setStatus('❌ 该比赛下注已关闭');
+      } else if (msg.includes('Match does not exist')) {
+        setStatus('❌ 该比赛尚未创建（等待比赛开始）');
+      } else if (msg.includes('exceeds') || msg.includes('transfer')) {
+        setStatus('❌ USDC 转账失败 — 请确认余额充足且已授权');
+      } else {
+        setStatus('❌ ' + msg);
+      }
     } finally {
       setBusy(false);
     }
@@ -761,7 +814,7 @@ function Prediction({ displayMatchId, epoch, arenaType }: { displayMatchId: stri
       <div className="panel-row"><span>当前比赛</span><span>{displayMatchId ? `Epoch ${epoch} #${displayMatchId}` : '--'}</span></div>
       <input placeholder="比赛编号 (如 P5, A3)" value={targetMatch} onChange={e => setTargetMatch(e.target.value)} />
       <input placeholder="机器人名称 (预测谁赢?)" value={botName} onChange={e => setBotName(e.target.value)} style={{ marginTop: '6px' }} />
-      <input placeholder="预测金额 (USDC)" value={amount} onChange={e => setAmount(e.target.value)} type="number" min="0.01" step="0.01" style={{ marginTop: '6px' }} />
+      <input placeholder="USDC 金额" value={amount} onChange={e => setAmount(e.target.value)} type="number" min="1" step="1" style={{ marginTop: '6px' }} />
       <div style={{ display: 'flex', gap: '4px', marginTop: '6px' }}>
         {['1', '5', '10'].map(v => (
           <button key={v} onClick={() => setAmount(v)} type="button"
@@ -771,7 +824,7 @@ function Prediction({ displayMatchId, epoch, arenaType }: { displayMatchId: stri
         ))}
       </div>
       <button onClick={handlePredict} disabled={busy} style={{ marginTop: '6px' }}>
-        {busy ? '⏳ ' + status : '🔮 USDC 预测'}
+        {busy ? '⏳ ' + status : '💰 USDC 预测'}
       </button>
       {!busy && status && <div className="muted" style={{ marginTop: '6px' }}>{status}</div>}
     </div>
@@ -779,53 +832,59 @@ function Prediction({ displayMatchId, epoch, arenaType }: { displayMatchId: stri
 }
 
 function CompetitiveEnter({ displayMatchId }: { displayMatchId: string | null }) {
-  const { isConnected } = useAccount();
+  const { isConnected, address } = useAccount();
   const [botName, setBotName] = useState('');
   const [targetMatch, setTargetMatch] = useState('');
   const [status, setStatus] = useState('');
-  const [resolvedBotId, setResolvedBotId] = useState('');
-  const { writeContract, data: hash, isPending } = useWriteContract();
-  const { isLoading: isConfirming, isSuccess: isConfirmed } = useWaitForTransactionReceipt({ hash });
-
-  useEffect(() => {
-    if (isConfirmed && hash && resolvedBotId) {
-      setStatus('⏳ Confirming entry...');
-      fetch('/api/competitive/enter', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ botId: resolvedBotId, displayMatchId: targetMatch, txHash: hash })
-      }).then(r => r.json()).then(data => {
-        setStatus(data.ok ? '✅ Entry confirmed for match ' + targetMatch : '⚠️ ' + (data.error || data.message || 'Failed'));
-      }).catch(() => setStatus('⚠️ Network Error'));
-    }
-  }, [isConfirmed, hash, resolvedBotId, targetMatch]);
+  const [busy, setBusy] = useState(false);
+  const { sendTransactionAsync } = useSendTransaction();
 
   const handleEnter = async () => {
-    if (!isConnected) return alert('Connect Wallet');
+    if (!isConnected || !address) return alert('Connect Wallet');
     if (!botName) return alert('Enter Bot Name');
     if (!targetMatch) return alert('Enter target match (e.g. A3)');
 
+    setBusy(true);
     try {
       setStatus('Looking up bot...');
       const res = await fetch('/api/bot/lookup?name=' + encodeURIComponent(botName));
       if (!res.ok) {
         const err = await res.json();
         setStatus('⚠️ ' + (err.error === 'bot_not_found' ? 'Bot "' + botName + '" not found' : err.error));
+        setBusy(false);
         return;
       }
       const data = await res.json();
-      setResolvedBotId(data.botId);
+      const resolvedBotId = data.botId;
 
-      // Pay entry fee (0.001 ETH) via direct transfer to BotRegistry
-      writeContract({
-        address: CONTRACTS.botRegistry as `0x${string}`,
-        abi: [{ inputs: [], name: 'payEntryFee', outputs: [], stateMutability: 'payable', type: 'function' }] as const,
-        functionName: 'payEntryFee',
+      // Pay entry fee (0.001 ETH) via ETH transfer to backend wallet
+      setStatus('Sign transaction (0.001 ETH)...');
+      const txHash = await sendTransactionAsync({
+        to: '0xBa379b9AaF5eac6eCF9B532cb6563390De6edfEe' as `0x${string}`,
         value: parseEther('0.001'),
       });
+
+      setStatus('Confirming on-chain...');
+      await publicClient.waitForTransactionReceipt({ hash: txHash });
+
+      // Notify server of paid entry
+      setStatus('Registering entry...');
+      const enterRes = await fetch('/api/competitive/enter', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ botId: resolvedBotId, displayMatchId: targetMatch, txHash })
+      });
+      const enterData = await enterRes.json();
+      setStatus(enterData.ok ? '✅ Entry confirmed for match ' + targetMatch : '⚠️ ' + (enterData.error || enterData.message || 'Failed'));
     } catch (e: any) {
-      setStatus('Error: ' + e.message);
+      const msg = e?.shortMessage || e?.message || 'Failed';
+      if (msg.includes('user rejected') || msg.includes('denied')) {
+        setStatus('Transaction cancelled.');
+      } else {
+        setStatus('⚠️ ' + msg);
+      }
     }
+    setBusy(false);
   };
 
   return (
@@ -839,10 +898,10 @@ function CompetitiveEnter({ displayMatchId }: { displayMatchId: string | null })
         style={{ marginTop: '6px' }}
       />
       <div className="muted" style={{ marginTop: '4px' }}>Cost: 0.001 ETH per entry</div>
-      <button onClick={handleEnter} disabled={isPending || isConfirming} style={{ marginTop: '6px' }}>
-        {isPending ? 'Signing...' : isConfirming ? 'Confirming...' : '🎯 Enter Arena'}
+      <button onClick={handleEnter} disabled={busy} style={{ marginTop: '6px' }}>
+        {busy ? status || '...' : '🎯 Enter Arena'}
       </button>
-      {status && <div className="muted" style={{ marginTop: '6px' }}>{status}</div>}
+      {!busy && status && <div className="muted" style={{ marginTop: '6px' }}>{status}</div>}
     </div>
   );
 }
@@ -969,8 +1028,10 @@ function GameCanvas({
         if (!canvas) return;
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
+        const dpr = window.devicePixelRatio || 1;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-        const cellSize = canvas.width / 30;
+        const cellSize = (canvas.width / dpr) / 30;
 
         ctx.fillStyle = '#000';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -1107,7 +1168,7 @@ function GameCanvas({
         <div className="match-info">{matchInfo}</div>
         <div className="timer" style={{ color: timerColor }}>{timer}</div>
         <div className="canvas-wrap">
-          <canvas ref={canvasRef} width={600} height={600} style={{ border: `4px solid ${borderColor}`, background: '#000', maxWidth: '90%', maxHeight: '70vh' }}></canvas>
+          <canvas ref={canvasRef} width={600 * (typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1)} height={600 * (typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1)} style={{ width: 'min(600px, 90vw, 70vh)', height: 'min(600px, 90vw, 70vh)', border: `4px solid ${borderColor}`, background: '#000' }}></canvas>
           <div id="overlay">{overlay}</div>
         </div>
         <div className="status-bar">{status}</div>
@@ -1134,6 +1195,7 @@ const AIRDROP_TYPE_LABELS: Record<string, string> = {
 // Full-page Points view — now shows Airdrop Points + Prediction Balance
 function PointsPage() {
   const { address } = useAccount();
+  const { signMessageAsync } = useSignMessage();
   const [myAirdrop, setMyAirdrop] = useState<any>(null);
   const [myBalance, setMyBalance] = useState<any>(null);
   const [leaderboard, setLeaderboard] = useState<any[]>([]);
@@ -1166,12 +1228,7 @@ function PointsPage() {
       // Request wallet signature
       const timestamp = Date.now().toString();
       const message = `SnakeArena Checkin\nAddress: ${address}\nTimestamp: ${timestamp}`;
-      const provider = (window as any).ethereum;
-      if (!provider) { setCheckinStatus('No wallet found'); setCheckinBusy(false); return; }
-      const { BrowserProvider } = await import('ethers');
-      const ethProvider = new BrowserProvider(provider);
-      const signer = await ethProvider.getSigner();
-      const signature = await signer.signMessage(message);
+      const signature = await signMessageAsync({ message });
 
       const res = await fetch('/api/airdrop/checkin', {
         method: 'POST',
@@ -1318,6 +1375,7 @@ function MarketplacePage() {
   const [loading, setLoading] = useState(true);
   const [actionId, setActionId] = useState<number | null>(null);
   const [actionStatus, setActionStatus] = useState('');
+  const actionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const loadListings = async () => {
     try {
@@ -1356,18 +1414,23 @@ function MarketplacePage() {
       setActionStatus('Purchased! Updating ownership...');
       // Notify server to update local ownership based on NFT
       if (item.botId) {
-        await fetch('/api/bot/claim-nft', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ botId: item.botId, address, txHash }),
-        });
+        try {
+          await fetch('/api/bot/claim-nft', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ botId: item.botId, address, txHash }),
+          });
+        } catch (claimErr) {
+          console.warn('[Marketplace] claim-nft failed:', claimErr);
+        }
       }
       setActionStatus('Done!');
       await loadListings();
     } catch (e: any) {
       setActionStatus(e?.shortMessage || e?.message || 'Transaction failed');
     }
-    setTimeout(() => { setActionId(null); setActionStatus(''); }, 3000);
+    if (actionTimerRef.current) clearTimeout(actionTimerRef.current);
+    actionTimerRef.current = setTimeout(() => { setActionId(null); setActionStatus(''); }, 3000);
   };
 
   const handleCancel = async (item: any) => {
@@ -1388,7 +1451,8 @@ function MarketplacePage() {
     } catch (e: any) {
       setActionStatus(e?.shortMessage || e?.message || 'Cancel failed');
     }
-    setTimeout(() => { setActionId(null); setActionStatus(''); }, 3000);
+    if (actionTimerRef.current) clearTimeout(actionTimerRef.current);
+    actionTimerRef.current = setTimeout(() => { setActionId(null); setActionStatus(''); }, 3000);
   };
 
   return (
@@ -1423,7 +1487,6 @@ function MarketplacePage() {
                       <div className="muted" style={{ fontSize: '0.75rem' }}>
                         Seller: {item.seller ? (item.seller.slice(0, 6) + '...' + item.seller.slice(-4)) : 'unknown'}
                         {item.matchesPlayed ? ` | ${item.matchesPlayed} matches` : ''}
-                        {item.botId ? ` | ID: ${item.botId}` : ''}
                       </div>
                     </div>
                     <div style={{ textAlign: 'right' }}>
@@ -1510,7 +1573,7 @@ function App() {
       } catch (_e) {}
     };
     load();
-    const t = setInterval(load, 10000);
+    const t = setInterval(load, 30000);
     return () => clearInterval(t);
   }, []);
 
@@ -1635,4 +1698,39 @@ function App() {
   );
 }
 
-export default App;
+class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean; error: Error | null }> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    console.error('[ErrorBoundary]', error, info);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ padding: 40, textAlign: 'center', color: '#ff4466', fontFamily: 'Orbitron, monospace' }}>
+          <h2>Something went wrong</h2>
+          <p style={{ color: '#888' }}>{this.state.error?.message}</p>
+          <button onClick={() => window.location.reload()} style={{ marginTop: 20, padding: '8px 24px', background: 'var(--neon-green)', color: '#000', border: 'none', borderRadius: 8, cursor: 'pointer', fontWeight: 'bold' }}>
+            Reload
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+function AppWithBoundary() {
+  return (
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
+  );
+}
+
+export default AppWithBoundary;

@@ -99,7 +99,19 @@ try {
 
     // Create sandbox context with blocked dangerous globals
     const sandbox = {
-        WebSocket: WebSocket,
+        WebSocket: function RestrictedWebSocket(url, ...args) {
+            // Only allow connections to localhost to prevent SSRF
+            try {
+                const parsed = new URL(url);
+                if (parsed.hostname !== 'localhost' && parsed.hostname !== '127.0.0.1' && parsed.hostname !== '::1') {
+                    throw new Error('Security Error: WebSocket connections only allowed to localhost');
+                }
+            } catch (e) {
+                if (e.message.includes('Security Error')) throw e;
+                throw new Error('Security Error: Invalid WebSocket URL');
+            }
+            return new WebSocket(url, ...args);
+        },
         console: safeConsole,
         CONFIG: Object.freeze({
             serverUrl: serverUrl,
@@ -153,10 +165,34 @@ try {
         http: undefined,
         https: undefined,
         child_process: undefined,
+        Proxy: undefined,
+        Reflect: undefined,
+        Symbol: undefined,
+        WeakRef: undefined,
+        FinalizationRegistry: undefined,
+        SharedArrayBuffer: undefined,
+        Atomics: undefined,
     };
 
     // Create context from sandbox
     vm.createContext(sandbox);
+
+    // Freeze prototypes inside sandbox to prevent constructor chain escape
+    vm.runInContext(`
+        (function() {
+            var freeze = Object.freeze;
+            [Array, Object, String, Number, Boolean, RegExp, Map, Set, Error, TypeError, RangeError, Promise].forEach(function(C) {
+                if (C && C.prototype) {
+                    freeze(C.prototype);
+                    if (C.prototype.constructor) freeze(C.prototype.constructor);
+                }
+            });
+            // Freeze Object methods that could be used for escape
+            freeze(Object);
+            freeze(Array);
+            freeze(Promise);
+        })();
+    `, sandbox);
 
     debugLog('Running user script');
 

@@ -31,7 +31,7 @@
   - `WebSocket`（已注入）
   - `CONFIG`（包含 `serverUrl`, `botId`）
 
-**禁止使用：** `require`, `import`, `process`, `fs`, `net`, `http`, `https`, `eval`
+**禁止使用：** `require`, `import`, `process`, `fs`, `net`, `http`, `https`, `eval`, `Function`, `Proxy`, `Reflect`, `Symbol`, `WeakRef`, `FinalizationRegistry`, `__proto__`, `constructor.constructor`, `getPrototypeOf`
 
 ---
 
@@ -46,18 +46,23 @@ curl -X POST http://107.174.228.72:3000/api/bot/register \
 ---
 
 ## 4. 上传脚本（Server-Side Upload）
+
+### 上传新 Bot（无需认证，每 IP 每小时限 10 个）
 ```bash
-curl -X POST http://107.174.228.72:3000/api/bot/upload \
+curl -X POST 'http://107.174.228.72:3000/api/bot/upload?name=MyBot' \
   -H "Content-Type: text/javascript" \
   --data-binary @my-bot.js
 ```
 
-更新已有 Bot：
+### 更新已有 Bot（需要 edit token）
+更新已有 bot 需要先通过钱包签名获取 edit token，然后在请求头中携带：
 ```bash
 curl -X POST "http://107.174.228.72:3000/api/bot/upload?botId=bot_cqlhog" \
   -H "Content-Type: text/javascript" \
+  -H "x-edit-token: <your-edit-token>" \
   --data-binary @my-bot.js
 ```
+> Edit token 通过 `POST /api/bot/edit-token` 获取，需要钱包签名验证身份。
 
 ---
 

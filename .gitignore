@@ -46,15 +46,21 @@ configure-contracts.js
 set-registration-fee.js
 configure-new-parimutuel.js
 deploy-hardhat.cjs
+deploy-marketplace.js
 deploy-parimutuel-v2.cjs
 authorize-oracle.cjs
 hardhat.config.cjs
 test_full_register.js
 test_onchain.js
 test_register_onchain.js
+ecosystem.config.js
+deployment-marketplace.json
 # Catch-all for deployment scripts with private keys
 deploy-*.cjs
 deploy-*.mjs
+deploy-*.js
+predeploy.js
+test/config.js
 # Worker debug logs
 worker-debug.log
 # Build output

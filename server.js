@@ -5,7 +5,6 @@ const express = require('express');
 const http = require('http');
 const path = require('path');
 const fs = require('fs');
-const bodyParser = require('body-parser');
 const { Worker } = require('worker_threads');
 
 // --- Blockchain Config ---
@@ -15,7 +14,7 @@ const { ethers } = require('ethers');
 const CONTRACTS = {
     botRegistry: process.env.BOT_REGISTRY_CONTRACT || '0x25DEA1962A7A3a5fC4E1956E05b5eADE609E0800',
     rewardDistributor: process.env.REWARD_DISTRIBUTOR_CONTRACT || '0xB354e3062b493466da0c1898Ede5aabF56279046',
-    pariMutuel: process.env.PARIMUTUEL_CONTRACT || '0x1fDDd7CC864F85B20F1EF27221B5DD6C5Ffe413d',
+    pariMutuel: process.env.PARIMUTUEL_CONTRACT || '0x35c8660C448Ccc5eef716E5c4aa2455c82B843C7',
     snakeBotNFT: process.env.NFT_CONTRACT || '0xF269b84543041EA350921E3e3A2Da0B14B85453C',
     referralRewards: process.env.REFERRAL_CONTRACT || '0xfAA055B73D0CbE3E114152aE38f5E76a09F6524F',
     botMarketplace: process.env.BOT_MARKETPLACE_CONTRACT || '0x3088D308148B1FE6BE61770E2Bb78B41852Db4fC'
@@ -432,8 +431,9 @@ function getNextColor(room) {
 }
 
 const app = express();
+app.set('trust proxy', 1);
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
+const wss = new WebSocket.Server({ server, maxPayload: 64 * 1024 });
 
 // --- Security Config ---
 const ADMIN_KEY = process.env.ADMIN_KEY || null;
@@ -441,14 +441,23 @@ const BOT_UPLOAD_KEY = process.env.BOT_UPLOAD_KEY || ADMIN_KEY;
 const MAX_NAME_LEN = 32;
 const MAX_BOT_ID_LEN = 32;
 
+function isValidBotId(id) {
+    return typeof id === 'string' && id.length > 0 && id.length <= MAX_BOT_ID_LEN && /^[a-zA-Z0-9_-]+$/.test(id) && !['__proto__', 'constructor', 'prototype', 'toString', 'valueOf', 'hasOwnProperty'].includes(id);
+}
+
 function getClientIp(req) {
-    const xf = req.headers['x-forwarded-for'];
-    if (xf) return xf.split(',')[0].trim();
-    return req.socket.remoteAddress || 'unknown';
+    return req.ip || req.socket.remoteAddress || 'unknown';
 }
 
 function rateLimit({ windowMs, max }) {
     const store = new Map();
+    // Clean up expired entries every 5 minutes
+    const cleanupInterval = setInterval(() => {
+        const now = Date.now();
+        for (const [ip, entry] of store.entries()) {
+            if (now > entry.reset) store.delete(ip);
+        }
+    }, 5 * 60_000);
     return (req, res, next) => {
         const ip = getClientIp(req);
         const now = Date.now();
@@ -468,14 +477,18 @@ function rateLimit({ windowMs, max }) {
 function requireAdminKey(req, res, next) {
     if (!ADMIN_KEY) return res.status(503).json({ error: 'admin_key_not_configured' });
     const key = req.header('x-api-key');
-    if (!key || key !== ADMIN_KEY) return res.status(401).json({ error: 'unauthorized' });
+    if (!key || key.length !== ADMIN_KEY.length || !require('crypto').timingSafeEqual(Buffer.from(key), Buffer.from(ADMIN_KEY))) {
+        return res.status(401).json({ error: 'unauthorized' });
+    }
     next();
 }
 
 function requireUploadKey(req, res, next) {
     if (!BOT_UPLOAD_KEY) return res.status(503).json({ error: 'upload_key_not_configured' });
     const key = req.header('x-api-key');
-    if (!key || key !== BOT_UPLOAD_KEY) return res.status(401).json({ error: 'unauthorized' });
+    if (!key || key.length !== BOT_UPLOAD_KEY.length || !require('crypto').timingSafeEqual(Buffer.from(key), Buffer.from(BOT_UPLOAD_KEY))) {
+        return res.status(401).json({ error: 'unauthorized' });
+    }
     next();
 }
 
@@ -483,6 +496,13 @@ app.use((req, res, next) => {
     res.header('Cache-Control', 'private, no-cache, no-store, must-revalidate');
     res.header('Expires', '-1');
     res.header('Pragma', 'no-cache');
+    next();
+});
+
+app.use((req, res, next) => {
+    res.header('X-Content-Type-Options', 'nosniff');
+    res.header('X-Frame-Options', 'DENY');
+    res.header('Referrer-Policy', 'strict-origin-when-cross-origin');
     next();
 });
 
@@ -494,7 +514,17 @@ app.use(express.static(path.join(__dirname, 'public'), {
         res.setHeader('Expires', '0');
     }
 }));
-app.use(bodyParser.json({ limit: '200kb' }));
+app.use(express.json({ limit: '200kb' }));
+// Enforce Content-Type on mutating requests
+app.use((req, res, next) => {
+    if (['POST', 'PUT', 'DELETE'].includes(req.method)) {
+        const ct = (req.headers['content-type'] || '').toLowerCase();
+        if (!ct.includes('application/json') && !ct.includes('text/javascript') && !ct.includes('application/javascript')) {
+            return res.status(415).json({ error: 'unsupported_content_type', message: 'Content-Type must be application/json or text/javascript' });
+        }
+    }
+    next();
+});
 
 // API rate limiting
 app.use('/api', rateLimit({ windowMs: 60_000, max: 120 }));
@@ -509,7 +539,7 @@ if (fs.existsSync(HISTORY_FILE)) {
         if (matchHistory.length > 0 && matchHistory[0].matchId) {
             matchNumber = matchHistory[0].matchId + 1;
         }
-    } catch (e) {}
+    } catch (e) { log.warn('[History] Failed to load:', e.message); }
 }
 
 function nextMatchId() {
@@ -530,12 +560,14 @@ if (fs.existsSync(COUNTERS_FILE)) {
         compMatchCounter = saved.compMatchCounter || 1;
         lastResetDate = saved.lastResetDate || lastResetDate;
         log.important(`[Counters] Restored: P${perfMatchCounter}, A${compMatchCounter}, date=${lastResetDate}`);
-    } catch (e) {}
+    } catch (e) { log.warn('[Counters] Failed to load:', e.message); }
 }
 function saveCounters() {
     try {
-        fs.writeFileSync(COUNTERS_FILE, JSON.stringify({ perfMatchCounter, compMatchCounter, lastResetDate }));
-    } catch (e) {}
+        const tmp = COUNTERS_FILE + '.tmp';
+        fs.writeFileSync(tmp, JSON.stringify({ perfMatchCounter, compMatchCounter, lastResetDate }));
+        fs.renameSync(tmp, COUNTERS_FILE);
+    } catch (e) { log.warn('[Counters] Failed to save:', e.message); }
 }
 
 // Epoch counter — days since 2026-02-20 (launch date), starting at 1
@@ -567,34 +599,41 @@ function registerDisplayId(displayId, matchId) {
 const _txQueue = [];
 let _txRunning = false;
 function enqueueTx(label, fn) {
-    _txQueue.push({ label, fn });
+    _txQueue.push({ label, fn, resolve: null, reject: null });
     if (!_txRunning) _drainTxQueue();
+}
+// Awaitable version — returns a Promise that resolves/rejects with the tx result
+function enqueueTxAsync(label, fn) {
+    return new Promise((resolve, reject) => {
+        _txQueue.push({ label, fn, resolve, reject });
+        if (!_txRunning) _drainTxQueue();
+    });
 }
 async function _drainTxQueue() {
     _txRunning = true;
     try {
         while (_txQueue.length > 0) {
-            const { label, fn } = _txQueue.shift();
+            const { label, fn, resolve, reject } = _txQueue.shift();
             try {
                 // Use 'pending' nonce so we don't collide with stuck mempool txs
-                // Also use 3x gas to ensure fast inclusion and avoid replacement-fee issues
                 let overrides = {};
                 if (backendWallet) {
                     const pendingNonce = await backendWallet.provider.getTransactionCount(backendWallet.address, 'pending');
                     const feeData = await backendWallet.provider.getFeeData();
                     overrides = {
                         nonce: pendingNonce,
-                        maxFeePerGas: (feeData.maxFeePerGas || ethers.parseUnits('10', 'gwei')) * 3n,
-                        maxPriorityFeePerGas: (feeData.maxPriorityFeePerGas || ethers.parseUnits('2', 'gwei')) * 3n,
+                        maxFeePerGas: (feeData.maxFeePerGas || ethers.parseUnits('10', 'gwei')) * 2n,
+                        maxPriorityFeePerGas: (feeData.maxPriorityFeePerGas || ethers.parseUnits('2', 'gwei')) * 2n,
                     };
                 }
-                await fn(overrides);
+                const result = await fn(overrides);
+                if (resolve) resolve(result);
             } catch (e) {
                 log.warn('[TxQueue] ' + label + ' failed: ' + e.message);
+                if (reject) reject(e);
             }
         }
     } finally {
-        // Always reset _txRunning so future enqueued items can start the drain
         _txRunning = false;
     }
 }
@@ -616,12 +655,13 @@ function checkDailyReset() {
 }
 setInterval(checkDailyReset, 60_000);
 
-function saveHistory(arenaId, winnerName, score) {
+function saveHistory(arenaId, winnerName, score, winnerId) {
     matchHistory.unshift({
         matchId: nextMatchId(),
         arenaId,
         timestamp: new Date().toISOString(),
         winner: winnerName,
+        winnerId: winnerId || null,
         score: score,
     });
     // Keep last 500 matches
@@ -688,6 +728,33 @@ function stopBotWorker(botId, markStopped = true) {
     }
 }
 
+function scanBotScript(content) {
+    // Regex patterns (resist string concatenation bypass)
+    const forbiddenPatterns = [
+        /\brequire\s*\(/,
+        /\bimport\s+/,
+        /child_process/,
+        /\b__dirname\b/,
+        /\b__filename\b/,
+        /\bprocess\s*\.\s*(env|exit|kill|mainModule|binding)/,
+        /\bglobal\s*\[/,
+        /\bglobal\s*\./,
+        /Function\s*\(/,
+        /\beval\s*\(/,
+        /constructor\s*\.\s*constructor/,
+        /__proto__/,
+        /getPrototypeOf/,
+        /\bProxy\s*\(/,
+        /\bReflect\s*\./,
+        /\bSymbol\s*\./,
+        /\bWeakRef\s*\(/,
+        /\bFinalizationRegistry\s*\(/,
+    ];
+    const risk = forbiddenPatterns.find(p => p.test(content));
+    if (risk) return `Matched forbidden pattern: ${risk}`;
+    return null;
+}
+
 function startBotWorker(botId, overrideArenaId) {
     // Stop existing if any (don't mark as stopped since we're restarting)
     stopBotWorker(botId, false);
@@ -698,24 +765,12 @@ function startBotWorker(botId, overrideArenaId) {
         return;
     }
 
-    // Static Scan - Check for dangerous globals (regex-based to resist string concatenation bypass)
+    // Static Scan - Check for dangerous globals
     try {
         const content = fs.readFileSync(bot.scriptPath, 'utf8');
-        const forbiddenPatterns = [
-            /\brequire\s*\(/,
-            /\bimport\s+/,
-            /child_process/,
-            /\b__dirname\b/,
-            /\b__filename\b/,
-            /\bprocess\s*\.\s*(env|exit|kill|mainModule|binding)/,
-            /\bglobal\s*\[/,
-            /\bglobal\s*\./,
-            /Function\s*\(/,
-            /\beval\s*\(/,
-        ];
-        const risk = forbiddenPatterns.find(p => p.test(content));
-        if (risk) {
-            log.error(`[Worker] Bot ${botId} blocked. Matched forbidden pattern: ${risk}`);
+        const scanResult = scanBotScript(content);
+        if (scanResult) {
+            log.error(`[Worker] Bot ${botId} blocked. ${scanResult}`);
             return;
         }
     } catch (e) {
@@ -792,16 +847,18 @@ function resumeRunningBots() {
 }
 
 // Add text parser for upload
-app.use(bodyParser.text({ type: 'text/javascript', limit: '200kb' }));
-app.use(bodyParser.text({ type: 'application/javascript', limit: '200kb' }));
-app.use(bodyParser.text({ type: 'text/plain', limit: '200kb' }));
+app.use(express.text({ type: 'text/javascript', limit: '200kb' }));
+app.use(express.text({ type: 'application/javascript', limit: '200kb' }));
+app.use(express.text({ type: ['text/javascript', 'application/javascript'], limit: '200kb' }));
 
 function saveBotRegistry() {
     try {
         const dir = path.dirname(BOT_DB_FILE);
         if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(BOT_DB_FILE, JSON.stringify(botRegistry, null, 2));
-    } catch (e) {}
+        const tmp = BOT_DB_FILE + '.tmp';
+        fs.writeFileSync(tmp, JSON.stringify(botRegistry, null, 2));
+        fs.renameSync(tmp, BOT_DB_FILE);
+    } catch (e) { log.warn('[BotDB] Failed to save:', e.message); }
 }
 
 loadBotRegistry();
@@ -1431,6 +1488,17 @@ class GameRoom {
             placements, // [1st botId, 2nd botId, 3rd botId]
         });
 
+        // Settle match on-chain (PariMutuel USDC contract) — fire-and-forget
+        if (pariMutuelContract && placements.length > 0) {
+            const onChainMatchId = this.currentMatchId;
+            const winnerBytes32Array = placements.map(botId => ethers.encodeBytes32String(botId));
+            enqueueTx(`settleMatch ${onChainMatchId}`, async (overrides) => {
+                const tx = await pariMutuelContract.settleMatch(onChainMatchId, winnerBytes32Array, overrides);
+                await tx.wait();
+                log.important(`[Blockchain] settleMatch #${onChainMatchId} settled with ${placements.length} winner(s): ${placements.join(', ')}`);
+            });
+        }
+
         // Settle bets using points (server-side pari-mutuel)
         this._settledBets = []; // store for airdrop calculation
         if (placements.length > 0) {
@@ -1554,7 +1622,9 @@ class GameRoom {
         }
         
         const filename = `match-${this.currentMatchId}.json`;
-        fs.writeFileSync(path.join(replayDir, filename), JSON.stringify(replay));
+        fs.writeFile(path.join(replayDir, filename), JSON.stringify(replay), (err) => {
+            if (err) log.error('[Replay] Failed to save:', err.message);
+        });
         log.info(`[Replay] Saved ${filename} (${this.replayFrames.length} frames)`);
         
         // Clear frames for next match
@@ -1615,6 +1685,17 @@ class GameRoom {
         this.displayMatchId = getNextDisplayId(this.type);
         registerDisplayId(this.displayMatchId, this.currentMatchId);
         this.victoryPauseTimer = 0;
+
+        // Create match on-chain (PariMutuel USDC contract) — fire-and-forget
+        if (pariMutuelContract) {
+            const onChainMatchId = this.currentMatchId;
+            const startTime = Math.floor(Date.now() / 1000) + 10; // 10 seconds in the future
+            enqueueTx(`createMatch ${onChainMatchId}`, async (overrides) => {
+                const tx = await pariMutuelContract.createMatch(onChainMatchId, startTime, overrides);
+                await tx.wait();
+                log.important(`[Blockchain] createMatch #${onChainMatchId} (startTime=${startTime}) confirmed`);
+            });
+        }
         this.lastSurvivorForVictory = null;
         this.matchTimeLeft = MATCH_DURATION;
         this._colorIndex = 0;
@@ -1707,16 +1788,7 @@ class GameRoom {
         this.matchTimeLeft = MATCH_DURATION;
         this.sendEvent('match_start', { matchId: this.currentMatchId, arenaId: this.id, arenaType: this.type });
 
-        // Create match on-chain for betting (queued to avoid nonce collisions)
-        if (pariMutuelContract && (this.type === 'performance' || this.type === 'competitive')) {
-            const matchId = this.currentMatchId;
-            const startTime = Math.floor(Date.now() / 1000) + 30; // +30s buffer so block.timestamp check passes
-            enqueueTx(`createMatch #${matchId}`, async (overrides) => {
-                const tx = await pariMutuelContract.createMatch(matchId, startTime, overrides);
-                await tx.wait(1, 120000);
-                log.important(`[Betting] Match #${matchId} (${this.type}) created on-chain`);
-            });
-        }
+        // Note: SnakeArenaBetting contract does not require createMatch — bets are placed directly by matchId
     }
 
     broadcastState() {
@@ -1772,7 +1844,7 @@ class GameRoom {
         };
 
         // Record frame for replay (only during PLAYING)
-        if (this.gameState === 'PLAYING') {
+        if (this.gameState === 'PLAYING' && this.replayFrames.length < 2000) {
             this.replayFrames.push({
                 turn: this.turn,
                 matchTimeLeft: this.matchTimeLeft,
@@ -1889,6 +1961,11 @@ class GameRoom {
         if (playerId && this.players[playerId] && this.players[playerId].alive) {
             const p = this.players[playerId];
             const newDir = data.direction;
+            // Validate direction is one of the 4 cardinal directions
+            if (!newDir || typeof newDir.x !== 'number' || typeof newDir.y !== 'number') return;
+            const valid = (newDir.x === 0 && (newDir.y === 1 || newDir.y === -1)) ||
+                          (newDir.y === 0 && (newDir.x === 1 || newDir.x === -1));
+            if (!valid) return;
             if (!isOpposite(newDir, p.direction)) {
                 p.nextDirection = newDir;
             }
@@ -2087,7 +2164,7 @@ function saveEntryFee() {
         const dir = path.dirname(ENTRY_FEE_FILE);
         if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
         fs.writeFileSync(ENTRY_FEE_FILE, JSON.stringify({ currentEntryFee }, null, 2));
-    } catch (e) {}
+    } catch (e) { log.warn('[EntryFee] Failed to save:', e.message); }
 }
 
 loadEntryFee();
@@ -2336,7 +2413,7 @@ wss.on('connection', (ws, req) => {
             if (data.type === 'move' && room) {
                 room.handleMove(playerId, data);
             }
-        } catch (e) {}
+        } catch (e) { console.error('[WS]', e.message); }
     });
 
     ws.on('close', () => {
@@ -2349,17 +2426,11 @@ wss.on('connection', (ws, req) => {
 
 // --- API (MVP) ---
 function createBotId() {
-    return 'bot_' + Math.random().toString(36).slice(2, 8);
+    return 'bot_' + require('crypto').randomBytes(4).toString('hex');
 }
 
 function generateRegCode() {
-    // Generate 8-character alphanumeric code (uppercase)
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    let code = '';
-    for (let i = 0; i < 8; i++) {
-        code += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return code;
+    return require('crypto').randomBytes(4).toString('hex').toUpperCase();
 }
 
 function getRoomStatus(room) {
@@ -2463,16 +2534,19 @@ app.post('/api/bot/register', rateLimit({ windowMs: 60_000, max: 10 }), async (r
         } catch (e) {
             // getBotById reverted = bot doesn't exist yet, that's fine
         }
-        // If not on-chain yet, create it
+        // If not on-chain yet, create it via TX queue (prevents nonce collisions)
         if (!onChainOk) {
             try {
-                const tx = await botRegistryContract.createBot(
-                    botIdBytes32,
-                    safeName,
-                    ethers.ZeroAddress
-                );
-                await tx.wait(1, 60000);
-                log.important(`[Blockchain] Bot ${id} created on-chain via /register`);
+                await enqueueTxAsync(`createBot ${id}`, async (overrides) => {
+                    const tx = await botRegistryContract.createBot(
+                        botIdBytes32,
+                        safeName,
+                        ethers.ZeroAddress,
+                        overrides
+                    );
+                    await tx.wait(1, 60000);
+                    log.important(`[Blockchain] Bot ${id} created on-chain via /register`);
+                });
                 onChainOk = true;
             } catch (err) {
                 log.warn('[Blockchain] Failed to create bot on-chain via /register:', err.message);
@@ -2490,10 +2564,13 @@ app.post('/api/bot/register', rateLimit({ windowMs: 60_000, max: 10 }), async (r
         }
     }
 
+    // Build clean response (exclude regCode to prevent agent confusion)
+    const { regCode: _rc, ...cleanBot } = botRegistry[id];
+
     // auto-assign room on register (performance by default) — only for new bots
     if (!isExisting) {
-        const room = assignRoomForJoin({ name: botRegistry[id].name, botType: botRegistry[id].botType, botPrice: botRegistry[id].price || 0, arenaType: 'performance' });
-        const payload = { ...botRegistry[id], onChainReady: onChainOk };
+        const room = assignRoomForJoin({ name: cleanBot.name, botType: cleanBot.botType, botPrice: cleanBot.price || 0, arenaType: 'performance' });
+        const payload = { ...cleanBot, onChainReady: onChainOk };
         if (room) {
             payload.arenaId = room.id;
             payload.wsUrl = 'ws://' + req.headers.host + '?arenaId=' + room.id;
@@ -2505,12 +2582,13 @@ app.post('/api/bot/register', rateLimit({ windowMs: 60_000, max: 10 }), async (r
     }
 
     // For existing bots, return current state
-    const payload = { ...botRegistry[id], onChainReady: onChainOk };
+    const payload = { ...cleanBot, onChainReady: onChainOk };
     res.json(payload);
 });
 
 app.post('/api/bot/set-price', requireAdminKey, (req, res) => {
     const { botId, newPrice } = req.body || {};
+    if (!isValidBotId(botId)) return res.status(400).json({ error: 'invalid_bot_id' });
     if (!botRegistry[botId]) return res.status(404).json({ error: 'bot_not_found' });
     botRegistry[botId].price = newPrice;
     saveBotRegistry();
@@ -2549,6 +2627,7 @@ app.get('/api/bot/registration-fee', async (req, res) => {
 });
 
 app.get('/api/bot/:botId', (req, res) => {
+    if (!isValidBotId(req.params.botId)) return res.status(400).json({ error: 'invalid_bot_id' });
     const bot = botRegistry[req.params.botId];
     if (!bot) return res.status(404).json({ error: 'bot_not_found' });
     res.json(bot);
@@ -2556,6 +2635,7 @@ app.get('/api/bot/:botId', (req, res) => {
 
 app.post('/api/bot/topup', requireAdminKey, (req, res) => {
     const { botId, amount } = req.body || {};
+    if (!isValidBotId(botId)) return res.status(400).json({ error: 'invalid_bot_id' });
     const bot = botRegistry[botId];
     if (!bot) return res.status(404).json({ error: 'bot_not_found' });
     const packs = Math.max(1, Math.floor((amount || 0.01) / 0.01));
@@ -2565,6 +2645,7 @@ app.post('/api/bot/topup', requireAdminKey, (req, res) => {
 });
 
 app.get('/api/bot/:botId/credits', (req, res) => {
+    if (!isValidBotId(req.params.botId)) return res.status(400).json({ error: 'invalid_bot_id' });
     const bot = botRegistry[req.params.botId];
     if (!bot) return res.status(404).json({ error: 'bot_not_found' });
     res.json({ credits: bot.credits });
@@ -2653,8 +2734,12 @@ app.post('/api/bot/edit-token', rateLimit({ windowMs: 60_000, max: 20 }), async 
             return res.status(400).json({ error: 'missing_params', message: 'botId, address, signature required' });
         }
 
-        // 1. Verify wallet signature (timestamp included in message for uniqueness)
+        // 1. Verify wallet signature with timestamp freshness check
         const ts = timestamp || Date.now().toString();
+        const tsNum = parseInt(ts);
+        if (!tsNum || Math.abs(Date.now() - tsNum) > 30 * 60 * 1000) {
+            return res.status(401).json({ error: 'timestamp_expired', message: 'Signature timestamp too old (30 min window)' });
+        }
         const message = `Snake Arena Edit: ${botId} at ${ts}`;
         let recovered;
         try {
@@ -2771,7 +2856,7 @@ app.get('/api/competitive/registered', (req, res) => {
     res.json(agents);
 });
 
-app.post('/api/competitive/enter', (req, res) => {
+app.post('/api/competitive/enter', async (req, res) => {
     const { botId, displayMatchId, txHash } = req.body || {};
 
     if (!botId || !displayMatchId || !txHash) {
@@ -2785,6 +2870,16 @@ app.post('/api/competitive/enter', (req, res) => {
 
     const room = rooms.get('competitive-1');
     if (!room) return res.status(500).json({ error: 'no_competitive_room' });
+
+    // Verify transaction on-chain
+    try {
+        const receipt = await provider.getTransactionReceipt(txHash);
+        if (!receipt || receipt.status !== 1) {
+            return res.status(400).json({ error: 'tx_not_confirmed', message: 'Transaction not confirmed on-chain' });
+        }
+    } catch (e) {
+        return res.status(400).json({ error: 'tx_verification_failed', message: 'Could not verify transaction: ' + e.message });
+    }
 
     // Compare numeric part: "A4" vs "A3" → 4 >= 3 ✓
     const parseNum = (s) => parseInt(String(s).replace(/^[A-Za-z]+/, '')) || 0;
@@ -2870,7 +2965,12 @@ app.post('/api/bot/upload', rateLimit({ windowMs: 60_000, max: 10 }), async (req
     try {
         const { botId, name } = req.query;
         let scriptContent = req.body;
-        
+
+        // Validate botId format to prevent prototype pollution
+        if (botId && !isValidBotId(botId)) {
+            return res.status(400).json({ error: 'invalid_bot_id' });
+        }
+
         // If body-parser failed or body is empty
         if (!scriptContent || typeof scriptContent !== 'string') {
             return res.status(400).json({ error: 'invalid_script_content', message: 'Send script as text/javascript body' });
@@ -2898,14 +2998,23 @@ app.post('/api/bot/upload', rateLimit({ windowMs: 60_000, max: 10 }), async (req
             }
         }
 
-        // 1. Static Scan
-        const forbidden = ['require', 'import', 'process', 'fs', 'net', 'http', 'https', 'child_process', 'eval', 'Function', 'constructor', 'global', 'Buffer'];
-        // Use a regex to check for word boundaries to avoid false positives on variable names like "processData"
-        // But block properties like "process.env"
-        // Simple heuristic: if it matches \bkeyword\b it is risky.
-        const risk = forbidden.find(k => new RegExp(`\\b${k}\\b`).test(scriptContent));
-        if (risk) {
-            return res.status(400).json({ error: 'security_violation', message: `Forbidden keyword found: ${risk}` });
+        // New bot upload: limit 10 bots per IP per hour (generous for shared VPN IPs)
+        if (!botId) {
+            const ip = getClientIp(req);
+            const ONE_HOUR = 3600_000;
+            const MAX_UPLOADS_PER_HOUR = 10;
+            const cutoff = Date.now() - ONE_HOUR;
+
+            const recentFromIp = Object.values(botRegistry).filter(b => b.uploadIp === ip && b.createdAt > cutoff).length;
+            if (recentFromIp >= MAX_UPLOADS_PER_HOUR) {
+                return res.status(429).json({ error: 'bot_limit_reached', message: `Upload limit: ${MAX_UPLOADS_PER_HOUR} bots per hour per IP. Please wait and try again.` });
+            }
+        }
+
+        // 1. Static Scan (unified)
+        const scanResult = scanBotScript(scriptContent);
+        if (scanResult) {
+            return res.status(400).json({ error: 'security_violation', message: scanResult });
         }
         
         // 2. Check name uniqueness
@@ -2934,6 +3043,7 @@ app.post('/api/bot/upload', rateLimit({ windowMs: 60_000, max: 10 }), async (req
                 botType: 'agent',
                 createdAt: Date.now(),
                 owner: owner,
+                uploadIp: getClientIp(req),
                 regCode: generateRegCode() // Generate registration code for new bots
             };
         } else if (!botRegistry[targetBotId]) {
@@ -2951,17 +3061,20 @@ app.post('/api/bot/upload', rateLimit({ windowMs: 60_000, max: 10 }), async (req
         if (owner && !botRegistry[targetBotId].owner) botRegistry[targetBotId].owner = owner;
         saveBotRegistry();
 
-        // 4. Create bot on-chain (if new bot)
+        // 4. Create bot on-chain via TX queue (if new bot)
         if (botRegistryContract && !botId) {
             try {
                 const botName = botRegistry[targetBotId].name;
-                const tx = await botRegistryContract.createBot(
-                    ethers.encodeBytes32String(targetBotId),
-                    botName,
-                    ethers.ZeroAddress // Initially unclaimed
-                );
-                await tx.wait();
-                log.important(`[Blockchain] Bot ${targetBotId} created on-chain`);
+                await enqueueTxAsync(`createBot ${targetBotId}`, async (overrides) => {
+                    const tx = await botRegistryContract.createBot(
+                        ethers.encodeBytes32String(targetBotId),
+                        botName,
+                        ethers.ZeroAddress,
+                        overrides
+                    );
+                    await tx.wait(1, 60000);
+                    log.important(`[Blockchain] Bot ${targetBotId} created on-chain`);
+                });
             } catch (chainErr) {
                 log.warn('[Blockchain] Failed to create bot on-chain:', chainErr.message);
                 // Non-blocking: bot still works locally even if chain fails
@@ -2976,21 +3089,14 @@ app.post('/api/bot/upload', rateLimit({ windowMs: 60_000, max: 10 }), async (req
         // 4. Auto-start bot (restart if already running, start if new)
         startBotWorker(targetBotId);
 
-        const response = { 
-            ok: true, 
-            botId: targetBotId, 
+        res.json({
+            ok: true,
+            botId: targetBotId,
             name: botRegistry[targetBotId].name,
             owner: botRegistry[targetBotId].owner,
             running: botRegistry[targetBotId].running || false,
-            message: 'Bot uploaded and started successfully.' 
-        };
-        
-        // Include registration code for new bots
-        if (isNewBot && botRegistry[targetBotId].regCode) {
-            response.regCode = botRegistry[targetBotId].regCode;
-        }
-        
-        res.json(response);
+            message: 'Bot uploaded and started successfully.'
+        });
     } catch (e) {
         console.error(e);
         res.status(500).json({ error: 'upload_failed' });
@@ -3178,6 +3284,23 @@ app.post('/api/bot/claim-nft', async (req, res) => {
 const betPools = {}; // matchId -> { total: 0, bets: [] } (mirrors on-chain for fast reads)
 const betRecords = {}; // matchId -> [{bettor, botId, amount (USDC units)}] for points calculation
 
+// Clean up old bet pools/records every hour (keep last 24h)
+setInterval(() => {
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    for (const matchId of Object.keys(betPools)) {
+        const pool = betPools[matchId];
+        if (pool.bets && pool.bets.length > 0 && pool.bets[pool.bets.length - 1].timestamp < cutoff) {
+            delete betPools[matchId];
+        }
+    }
+    for (const matchId of Object.keys(betRecords)) {
+        const records = betRecords[matchId];
+        if (records && records.length > 0 && records[records.length - 1].timestamp < cutoff) {
+            delete betRecords[matchId];
+        }
+    }
+}, 3600_000);
+
 // Get on-chain pool info for a match
 app.get('/api/bet/pool', async (req, res) => {
     const { matchId } = req.query;
@@ -3230,8 +3353,11 @@ const handleBetPlace = (req, res) => {
         return res.status(400).json({ error: 'Please connect wallet to place a bet' });
     }
 
-    // Verify bettor identity via signature (if provided)
-    if (signature && timestamp) {
+    // Require signature for bettor verification
+    if (!signature || !timestamp) {
+        return res.status(401).json({ error: 'Signature required for predictions' });
+    }
+    {
         const ts = parseInt(timestamp);
         if (!ts || Math.abs(Date.now() - ts) > 5 * 60 * 1000) {
             return res.status(401).json({ error: 'Signature expired' });
@@ -3265,6 +3391,9 @@ const handleBetPlace = (req, res) => {
     pointsData[addr].history.push({
         type: 'bet_place', matchId: Number(matchId), amount: -betAmount, botId, ts: Date.now()
     });
+    if (pointsData[addr].history.length > 200) {
+        pointsData[addr].history = pointsData[addr].history.slice(-200);
+    }
     savePoints();
 
     // Initialize pool for this match if not exists
@@ -3514,6 +3643,9 @@ app.get('/api/replays', (req, res) => {
 
 app.get('/api/replay/:matchId', (req, res) => {
     const matchId = req.params.matchId;
+    if (!/^\d+$/.test(matchId)) {
+        return res.status(400).json({ error: 'Invalid matchId' });
+    }
     const replayPath = path.join(__dirname, 'replays', `match-${matchId}.json`);
     if (!fs.existsSync(replayPath)) {
         return res.status(404).json({ error: 'Replay not found' });

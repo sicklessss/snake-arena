@@ -3,7 +3,8 @@ const fs = require('fs');
 
 // Deployment config
 const RPC_URL = 'https://sepolia.base.org';
-const PRIVATE_KEY = 'ce6cf4fe0c9e4073bb5a683041563d35df40bd5e7e2bf86804ec68dd03660e31';
+const PRIVATE_KEY = process.env.PRIVATE_KEY;
+if (!PRIVATE_KEY) { console.error('Missing PRIVATE_KEY env var'); process.exit(1); }
 
 // Provider and wallet
 const provider = new ethers.JsonRpcProvider(RPC_URL);

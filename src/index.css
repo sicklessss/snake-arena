@@ -45,7 +45,7 @@ body { background-color: var(--bg-color); color: #fff; font-family: 'Orbitron', 
 h1 { color: var(--neon-green); text-shadow: 0 0 10px rgba(0,255,136,0.5); margin: 4px 0 0 0; }
 .match-info { color: var(--neon-blue); font-size: 1.2rem; }
 .timer { color: #ff8800; font-size: 2rem; font-weight: bold; text-shadow: 0 0 15px rgba(255,136,0,0.7); }
-canvas { border: 4px solid var(--neon-blue); box-shadow: 0 0 30px rgba(0, 204, 255, 0.2); background-color: #000; max-width: 90%; max-height: 70vh; }
+canvas { box-shadow: 0 0 30px rgba(0, 204, 255, 0.2); background-color: #000; }
 .status-bar { margin-top: 6px; font-size: 0.95rem; color: #888; }
 .status-bar span { color: white; }
 .canvas-wrap { position: relative; display: flex; align-items: center; justify-content: center; width: 100%; }
@@ -103,13 +103,6 @@ canvas { border: 4px solid var(--neon-blue); box-shadow: 0 0 30px rgba(0, 204, 2
   overflow-y: auto;
 }
 
-/* Force RainbowKit modal above everything */
-[data-rk] div[role="dialog"],
-[data-rk] [aria-modal="true"],
-div[class*="ModalOverlay"],
-div[class*="modalOverlay"] {
-  z-index: 2147483647 !important;
-}
 
 /* Mobile layout: three pages */
 @media (max-width: 720px) {

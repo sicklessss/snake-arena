@@ -5,12 +5,12 @@ module.exports = {
     WS_URL: 'ws://107.174.228.72:3000',
 
     // Admin key (from .env)
-    ADMIN_KEY: 'snake-admin-key-2024',
+    ADMIN_KEY: process.env.ADMIN_KEY || '',
 
     // Blockchain config (Base Sepolia)
     RPC_URL: 'https://sepolia.base.org',
     CHAIN_ID: 84532,
-    PRIVATE_KEY: '0x22a94051b4fdd46d388291be01ea398faa49232b9be0f382fdbc140e4b84372a',
+    PRIVATE_KEY: process.env.TEST_PRIVATE_KEY || '',
 
     // Contract addresses (v5.1 from server.js)
     CONTRACTS: {
