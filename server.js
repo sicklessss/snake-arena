@@ -598,6 +598,13 @@ function registerDisplayId(displayId, matchId) {
     if (keys.length > 200) delete displayIdToMatchId[keys[0]];
 }
 
+function matchIdToDisplayId(matchId) {
+    for (const [did, mid] of Object.entries(displayIdToMatchId)) {
+        if (mid === matchId || mid === Number(matchId)) return did;
+    }
+    return null;
+}
+
 // --- Sequential blockchain TX queue (prevents nonce collisions) ---
 // fn receives txOverrides = { nonce } so each call uses the correct pending nonce
 const _txQueue = [];
@@ -1619,6 +1626,7 @@ class GameRoom {
         
         const replay = {
             matchId: this.currentMatchId,
+            displayMatchId: this.displayMatchId,
             arenaId: this.id,
             arenaType: this.type,
             gridSize: CONFIG.gridSize,
@@ -3411,6 +3419,121 @@ app.get('/api/pari-mutuel/claimable', async (req, res) => {
     }
 });
 
+// --- Portfolio: cached on-chain match pool scanner ---
+let _poolMatchCache = [];
+let _poolMatchCacheTs = 0;
+const _pariReadContract = new ethers.Contract(CONTRACTS.pariMutuel, PARI_MUTUEL_ABI, provider);
+
+async function _getMatchesWithPool() {
+    if (Date.now() - _poolMatchCacheTs < 30_000 && _poolMatchCache.length > 0) {
+        return _poolMatchCache;
+    }
+    const result = [];
+    const currentId = matchNumber;
+    const scanFrom = Math.max(0, currentId - 300);
+    const ids = [];
+    for (let i = currentId; i >= scanFrom; i--) ids.push(i);
+    for (const sid of settledOnChainMatchIds) {
+        if (!ids.includes(sid)) ids.push(sid);
+    }
+    for (let i = 0; i < ids.length; i += 5) {
+        const batch = ids.slice(i, i + 5);
+        try {
+            const results = await Promise.allSettled(
+                batch.map(mid => _pariReadContract.matches(mid))
+            );
+            for (let j = 0; j < results.length; j++) {
+                if (results[j].status !== 'fulfilled') continue;
+                const m = results[j].value;
+                if (Number(m.matchId) === 0) continue;
+                if (m.totalPool === 0n && !m.settled) continue;
+                result.push({ mid: batch[j], matchInfo: m });
+            }
+        } catch (_e) { /* rate limit */ }
+        if (i + 5 < ids.length) await new Promise(r => setTimeout(r, 120));
+    }
+    _poolMatchCache = result;
+    _poolMatchCacheTs = Date.now();
+    log.info(`[Portfolio] Scanned ${ids.length} matchIds, found ${result.length} with pool`);
+    return result;
+}
+
+// Portfolio API
+app.get('/api/portfolio', async (req, res) => {
+    const { address } = req.query;
+    if (!address) return res.status(400).json({ error: 'missing address' });
+    const addr = address.toLowerCase();
+
+    const activePositions = [];
+    const betHistory = [];
+    const claimable = [];
+
+    try {
+        const poolMatches = await _getMatchesWithPool();
+
+        for (let i = 0; i < poolMatches.length; i += 3) {
+            const batch = poolMatches.slice(i, i + 3);
+            try {
+                const betResults = await Promise.allSettled(
+                    batch.map(({ mid }) => _pariReadContract.getMatchBets(mid))
+                );
+                for (let j = 0; j < batch.length; j++) {
+                    if (betResults[j].status !== 'fulfilled') continue;
+                    const { mid, matchInfo } = batch[j];
+                    const bets = betResults[j].value;
+                    const isSettled = matchInfo.settled;
+                    const isCancelled = matchInfo.cancelled;
+                    const totalPool = ethers.formatUnits(matchInfo.totalPool, 6);
+                    const did = matchIdToDisplayId(mid) || String(mid);
+
+                    let userHasBets = false;
+                    for (const bet of bets) {
+                        if (bet.bettor.toLowerCase() !== addr) continue;
+                        userHasBets = true;
+                        const amount = ethers.formatUnits(bet.amount, 6);
+                        const botId = ethers.decodeBytes32String(bet.botId);
+
+                        if (!isSettled && !isCancelled) {
+                            activePositions.push({
+                                matchId: mid, displayMatchId: did, botId, amount,
+                                poolTotal: totalPool,
+                                timestamp: Number(matchInfo.startTime) * 1000,
+                            });
+                        } else {
+                            betHistory.push({
+                                type: bet.claimed ? 'bet_win' : 'bet_place',
+                                matchId: mid, displayMatchId: did, amount, botId,
+                                ts: Number(matchInfo.endTime || matchInfo.startTime) * 1000,
+                            });
+                        }
+                    }
+
+                    if (userHasBets && isSettled && !isCancelled) {
+                        try {
+                            const w = await _pariReadContract.getUserPotentialWinnings(mid, address);
+                            if (w > 0n) {
+                                claimable.push({
+                                    matchId: mid, displayMatchId: did,
+                                    winnings: ethers.formatUnits(w, 6),
+                                    winningsWei: w.toString(),
+                                });
+                            }
+                        } catch (_e) { /* ignore */ }
+                    }
+                }
+            } catch (_e) { /* rate limit */ }
+        }
+    } catch (e) {
+        log.error('[Portfolio] Error:', e.message);
+    }
+
+    betHistory.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+    betHistory.splice(50);
+
+    const claimableTotal = claimable.reduce((s, c) => s + parseFloat(c.winnings), 0).toFixed(2);
+    res.json({ activePositions, betHistory, claimable, claimableTotal });
+});
+
 const handleBetPlace = (req, res) => {
     const { matchId, botId, amount, bettor, arenaType, signature, timestamp } = req.body || {};
 
@@ -3685,7 +3808,9 @@ app.post('/api/airdrop/claim-register', async (req, res) => {
     });
 });
 
-// Replay APIs
+// Replay APIs (stricter rate limit: 5 req/min/IP for full replay data)
+const replayRateLimit = rateLimit({ windowMs: 60_000, max: 5 });
+
 app.get('/api/replays', (req, res) => {
     const replayDir = path.join(__dirname, 'replays');
     if (!fs.existsSync(replayDir)) {
@@ -3709,7 +3834,43 @@ app.get('/api/replays', (req, res) => {
     res.json(files);
 });
 
-app.get('/api/replay/:matchId', (req, res) => {
+// Lookup replay by display ID (P109, A5)
+app.get('/api/replay/by-display-id', replayRateLimit, (req, res) => {
+    const id = (req.query.id || '').toString().trim().toUpperCase();
+    if (!/^[PA]\d+$/.test(id)) {
+        return res.status(400).json({ error: 'Invalid display ID format (e.g. P109, A5)' });
+    }
+    // Check in-memory displayIdToMatchId map first
+    let numericId = displayIdToMatchId[id];
+    if (!numericId) {
+        // Fallback: scan replay files for matching displayMatchId or arenaType+matchId
+        const replayDir = path.join(__dirname, 'replays');
+        if (fs.existsSync(replayDir)) {
+            const prefix = id[0] === 'A' ? 'competitive' : 'performance';
+            const files = fs.readdirSync(replayDir).filter(f => f.endsWith('.json'));
+            for (const f of files) {
+                try {
+                    const data = JSON.parse(fs.readFileSync(path.join(replayDir, f)));
+                    if (data.displayMatchId === id || (data.arenaType === prefix && `${id[0]}${data.matchId}` === id)) {
+                        numericId = data.matchId;
+                        break;
+                    }
+                } catch (_) {}
+            }
+        }
+    }
+    if (!numericId) {
+        return res.status(404).json({ error: 'Replay not found' });
+    }
+    const replayPath = path.join(__dirname, 'replays', `match-${numericId}.json`);
+    if (!fs.existsSync(replayPath)) {
+        return res.status(404).json({ error: 'Replay not found' });
+    }
+    const replay = JSON.parse(fs.readFileSync(replayPath));
+    res.json(replay);
+});
+
+app.get('/api/replay/:matchId', replayRateLimit, (req, res) => {
     const matchId = req.params.matchId;
     if (!/^\d+$/.test(matchId)) {
         return res.status(400).json({ error: 'Invalid matchId' });

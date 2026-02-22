@@ -9,6 +9,123 @@ import './index.css';
 import { CONTRACTS, BOT_REGISTRY_ABI, PARI_MUTUEL_ABI, ERC20_ABI, BOT_MARKETPLACE_ABI, SNAKE_BOT_NFT_ABI } from './contracts';
 import foodSvgUrl from './assets/food.svg';
 
+// --- Shared canvas rendering function (used by GameCanvas + ReplayPage) ---
+function renderFrame(
+  ctx: CanvasRenderingContext2D,
+  frame: { players?: any[]; food?: any[]; obstacles?: any[] },
+  cellSize: number,
+  canvasW: number,
+  canvasH: number,
+  foodImg: HTMLImageElement | null,
+  opts?: { gridColor?: string }
+) {
+  const gridColor = opts?.gridColor || '#1a1a2e';
+
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, canvasW, canvasH);
+
+  ctx.strokeStyle = gridColor;
+  ctx.lineWidth = 0.5;
+  for (let i = 0; i <= 30; i++) {
+    ctx.beginPath(); ctx.moveTo(i * cellSize, 0); ctx.lineTo(i * cellSize, canvasH); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, i * cellSize); ctx.lineTo(canvasW, i * cellSize); ctx.stroke();
+  }
+
+  if (frame.obstacles && frame.obstacles.length > 0) {
+    for (const obs of frame.obstacles) {
+      if (obs.solid) {
+        ctx.fillStyle = '#8b0000';
+        ctx.shadowColor = '#ff0000';
+        ctx.shadowBlur = 4;
+        ctx.fillRect(obs.x * cellSize, obs.y * cellSize, cellSize, cellSize);
+        ctx.shadowBlur = 0;
+        ctx.strokeStyle = '#ff4444';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(obs.x * cellSize + 2, obs.y * cellSize + 2);
+        ctx.lineTo((obs.x + 1) * cellSize - 2, (obs.y + 1) * cellSize - 2);
+        ctx.moveTo((obs.x + 1) * cellSize - 2, obs.y * cellSize + 2);
+        ctx.lineTo(obs.x * cellSize + 2, (obs.y + 1) * cellSize - 2);
+        ctx.stroke();
+      } else {
+        const blink = Math.floor(Date.now() / 200) % 2 === 0;
+        if (blink) {
+          ctx.fillStyle = 'rgba(255, 200, 0, 0.6)';
+          ctx.shadowColor = '#ffcc00';
+          ctx.shadowBlur = 8;
+          ctx.fillRect(obs.x * cellSize, obs.y * cellSize, cellSize, cellSize);
+          ctx.shadowBlur = 0;
+        } else {
+          ctx.fillStyle = 'rgba(255, 200, 0, 0.2)';
+          ctx.fillRect(obs.x * cellSize, obs.y * cellSize, cellSize, cellSize);
+        }
+        ctx.strokeStyle = 'rgba(255, 200, 0, 0.8)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(obs.x * cellSize, obs.y * cellSize, cellSize, cellSize);
+      }
+    }
+  }
+
+  (frame.food || []).forEach((f: any) => {
+    if (foodImg) {
+      const pad = cellSize * 0.1;
+      ctx.drawImage(foodImg, f.x * cellSize + pad, f.y * cellSize + pad, cellSize - pad * 2, cellSize - pad * 2);
+    } else {
+      ctx.fillStyle = '#ff0055';
+      ctx.shadowColor = '#ff0055'; ctx.shadowBlur = 10;
+      ctx.beginPath(); ctx.arc(f.x * cellSize + cellSize / 2, f.y * cellSize + cellSize / 2, cellSize / 3, 0, Math.PI * 2); ctx.fill();
+      ctx.shadowBlur = 0;
+    }
+  });
+
+  (frame.players || []).forEach((p: any) => {
+    if (!p.body || p.body.length === 0) return;
+    ctx.fillStyle = p.color || '#00ff88';
+    ctx.shadowColor = p.color || '#00ff88';
+    ctx.shadowBlur = p.alive ? 8 : 0;
+    ctx.globalAlpha = p.alive ? 1 : 0.4;
+
+    const pName = p.name || '';
+    p.body.forEach((seg: any, i: number) => {
+      if (i === 0) return;
+      ctx.fillRect(seg.x * cellSize + 1, seg.y * cellSize + 1, cellSize - 2, cellSize - 2);
+      const letterIdx = i - 1;
+      if (letterIdx < pName.length && pName[letterIdx]) {
+        ctx.save();
+        ctx.fillStyle = '#000';
+        ctx.shadowBlur = 0;
+        ctx.globalAlpha = p.alive ? 0.8 : 0.3;
+        ctx.font = `bold ${Math.max(cellSize * 0.6, 8)}px Orbitron, monospace`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(pName[letterIdx], seg.x * cellSize + cellSize / 2, seg.y * cellSize + cellSize / 2 + 1);
+        ctx.restore();
+        ctx.fillStyle = p.color || '#00ff88';
+        ctx.shadowColor = p.color || '#00ff88';
+        ctx.shadowBlur = p.alive ? 8 : 0;
+        ctx.globalAlpha = p.alive ? 1 : 0.4;
+      }
+    });
+
+    const head = p.body[0];
+    const dir = p.direction || { x: 1, y: 0 };
+    const cx = head.x * cellSize + cellSize / 2;
+    const cy = head.y * cellSize + cellSize / 2;
+    const size = cellSize / 2 - 1;
+
+    ctx.beginPath();
+    if (dir.x === 1) { ctx.moveTo(cx + size, cy); ctx.lineTo(cx - size, cy - size); ctx.lineTo(cx - size, cy + size); }
+    else if (dir.x === -1) { ctx.moveTo(cx - size, cy); ctx.lineTo(cx + size, cy - size); ctx.lineTo(cx + size, cy + size); }
+    else if (dir.y === -1) { ctx.moveTo(cx, cy - size); ctx.lineTo(cx - size, cy + size); ctx.lineTo(cx + size, cy + size); }
+    else { ctx.moveTo(cx, cy + size); ctx.lineTo(cx - size, cy - size); ctx.lineTo(cx + size, cy - size); }
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = 1;
+  });
+}
+
 // --- CONFIG (multi-wallet, no WalletConnect dependency) ---
 const config = createConfig({
   chains: [baseSepolia],
@@ -1196,114 +1313,11 @@ function GameCanvas({
         const dpr = window.devicePixelRatio || 1;
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-        const cellSize = (canvas.width / dpr) / 30;
+        const logicalSize = canvas.width / dpr;
+        const cellSize = logicalSize / 30;
 
-        ctx.fillStyle = '#000';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-        ctx.strokeStyle = isCompetitive ? '#1a1020' : '#1a1a2e';
-        ctx.lineWidth = 0.5;
-        for (let i = 0; i <= 30; i++) {
-            ctx.beginPath(); ctx.moveTo(i*cellSize, 0); ctx.lineTo(i*cellSize, canvas.height); ctx.stroke();
-            ctx.beginPath(); ctx.moveTo(0, i*cellSize); ctx.lineTo(canvas.width, i*cellSize); ctx.stroke();
-        }
-
-        if (state.obstacles && state.obstacles.length > 0) {
-            for (const obs of state.obstacles) {
-                if (obs.solid) {
-                    ctx.fillStyle = '#8b0000';
-                    ctx.shadowColor = '#ff0000';
-                    ctx.shadowBlur = 4;
-                    ctx.fillRect(obs.x * cellSize, obs.y * cellSize, cellSize, cellSize);
-                    ctx.shadowBlur = 0;
-                    ctx.strokeStyle = '#ff4444';
-                    ctx.lineWidth = 1;
-                    ctx.beginPath();
-                    ctx.moveTo(obs.x * cellSize + 2, obs.y * cellSize + 2);
-                    ctx.lineTo((obs.x + 1) * cellSize - 2, (obs.y + 1) * cellSize - 2);
-                    ctx.moveTo((obs.x + 1) * cellSize - 2, obs.y * cellSize + 2);
-                    ctx.lineTo(obs.x * cellSize + 2, (obs.y + 1) * cellSize - 2);
-                    ctx.stroke();
-                } else {
-                    const blink = Math.floor(Date.now() / 200) % 2 === 0;
-                    if (blink) {
-                        ctx.fillStyle = 'rgba(255, 200, 0, 0.6)';
-                        ctx.shadowColor = '#ffcc00';
-                        ctx.shadowBlur = 8;
-                        ctx.fillRect(obs.x * cellSize, obs.y * cellSize, cellSize, cellSize);
-                        ctx.shadowBlur = 0;
-                    } else {
-                        ctx.fillStyle = 'rgba(255, 200, 0, 0.2)';
-                        ctx.fillRect(obs.x * cellSize, obs.y * cellSize, cellSize, cellSize);
-                    }
-                    ctx.strokeStyle = 'rgba(255, 200, 0, 0.8)';
-                    ctx.lineWidth = 1;
-                    ctx.strokeRect(obs.x * cellSize, obs.y * cellSize, cellSize, cellSize);
-                }
-            }
-        }
-
-        state.food.forEach((f: any) => {
-            if (foodImgRef.current) {
-                const pad = cellSize * 0.1;
-                ctx.drawImage(foodImgRef.current, f.x * cellSize + pad, f.y * cellSize + pad, cellSize - pad * 2, cellSize - pad * 2);
-            } else {
-                ctx.fillStyle = '#ff0055';
-                ctx.shadowColor = '#ff0055'; ctx.shadowBlur = 10;
-                ctx.beginPath(); ctx.arc(f.x*cellSize+cellSize/2, f.y*cellSize+cellSize/2, cellSize/3, 0, Math.PI*2); ctx.fill();
-                ctx.shadowBlur = 0;
-            }
-        });
-
-        (state.players || []).forEach((p: any) => {
-            if (!p.body || p.body.length === 0) return;
-
-            const isBlinking = !p.alive && p.blinking;
-            if (isBlinking && Math.floor(Date.now() / 500) % 2 === 0) return;
-
-            ctx.fillStyle = p.color || '#00ff88';
-            ctx.shadowColor = p.color || '#00ff88';
-            ctx.shadowBlur = p.alive ? 8 : 0;
-            ctx.globalAlpha = p.alive ? 1 : 0.4;
-
-            const pName = p.name || '';
-            p.body.forEach((seg: any, i: number) => {
-                if (i === 0) return;
-                ctx.fillRect(seg.x * cellSize + 1, seg.y * cellSize + 1, cellSize - 2, cellSize - 2);
-                const letterIdx = i - 1;
-                if (letterIdx < pName.length && pName[letterIdx]) {
-                    ctx.save();
-                    ctx.fillStyle = '#000';
-                    ctx.shadowBlur = 0;
-                    ctx.globalAlpha = p.alive ? 0.8 : 0.3;
-                    ctx.font = `bold ${Math.max(cellSize * 0.6, 8)}px Orbitron, monospace`;
-                    ctx.textAlign = 'center';
-                    ctx.textBaseline = 'middle';
-                    ctx.fillText(pName[letterIdx], seg.x * cellSize + cellSize/2, seg.y * cellSize + cellSize/2 + 1);
-                    ctx.restore();
-                    ctx.fillStyle = p.color || '#00ff88';
-                    ctx.shadowColor = p.color || '#00ff88';
-                    ctx.shadowBlur = p.alive ? 8 : 0;
-                    ctx.globalAlpha = p.alive ? 1 : 0.4;
-                }
-            });
-
-            const head = p.body[0];
-            const dir = p.direction || {x:1, y:0};
-            const cx = head.x * cellSize + cellSize/2;
-            const cy = head.y * cellSize + cellSize/2;
-            const size = cellSize/2 - 1;
-
-            ctx.beginPath();
-            if (dir.x === 1) { ctx.moveTo(cx+size,cy); ctx.lineTo(cx-size,cy-size); ctx.lineTo(cx-size,cy+size); }
-            else if (dir.x === -1) { ctx.moveTo(cx-size,cy); ctx.lineTo(cx+size,cy-size); ctx.lineTo(cx+size,cy+size); }
-            else if (dir.y === -1) { ctx.moveTo(cx,cy-size); ctx.lineTo(cx-size,cy+size); ctx.lineTo(cx+size,cy+size); }
-            else { ctx.moveTo(cx,cy+size); ctx.lineTo(cx-size,cy-size); ctx.lineTo(cx+size,cy-size); }
-            ctx.closePath();
-            ctx.fill();
-
-            ctx.shadowBlur = 0;
-            ctx.globalAlpha = 1;
+        renderFrame(ctx, state, cellSize, logicalSize, logicalSize, foodImgRef.current, {
+          gridColor: isCompetitive ? '#1a1020' : '#1a1a2e',
         });
     };
 
@@ -1532,6 +1546,220 @@ function PointsPage() {
   );
 }
 
+// Portfolio button — shown in header next to wallet button
+function PortfolioButton({ activePage, onSwitch }: { activePage: string; onSwitch: (p: any) => void }) {
+  const { isConnected } = useAccount();
+  if (!isConnected) return null;
+  const isActive = activePage === 'portfolio';
+  return (
+    <button
+      onClick={() => onSwitch('portfolio')}
+      style={{
+        padding: '6px 12px', fontSize: '0.8rem', borderRadius: '8px',
+        background: isActive ? 'var(--neon-green)' : 'rgba(0,255,136,0.1)',
+        color: isActive ? '#000' : 'var(--neon-green)',
+        border: '1px solid var(--neon-green)', cursor: 'pointer',
+        fontFamily: 'Orbitron, monospace', fontWeight: 'bold',
+      }}
+    >
+      Portfolio
+    </button>
+  );
+}
+
+// Full-page Portfolio view — positions, history, claim
+function PortfolioPage() {
+  const { address, isConnected } = useAccount();
+  const { writeContractAsync } = useWriteContract();
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState<'positions' | 'history'>('positions');
+  const [claiming, setClaiming] = useState(false);
+  const [claimStatus, setClaimStatus] = useState('');
+
+  const loadData = async () => {
+    if (!address) { setLoading(false); return; }
+    try {
+      const res = await fetch(`/api/portfolio?address=${address}`);
+      if (res.ok) setData(await res.json());
+    } catch (_e) { /* ignore */ }
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    setLoading(true);
+    loadData();
+    const t = setInterval(loadData, 15000);
+    return () => clearInterval(t);
+  }, [address]);
+
+  const handleClaimAll = async () => {
+    if (!data?.claimable?.length || claiming) return;
+    setClaiming(true);
+    setClaimStatus('Claiming...');
+    let claimed = 0;
+    for (const item of data.claimable) {
+      try {
+        await writeContractAsync({
+          address: CONTRACTS.pariMutuel as `0x${string}`,
+          abi: PARI_MUTUEL_ABI,
+          functionName: 'claimWinnings',
+          args: [BigInt(item.matchId)],
+        });
+        claimed++;
+        setClaimStatus(`Claimed ${claimed}/${data.claimable.length}...`);
+      } catch (e: any) {
+        const msg = e?.shortMessage || e?.message || '';
+        if (msg.includes('rejected') || msg.includes('denied')) {
+          setClaimStatus('Cancelled');
+          setClaiming(false);
+          return;
+        }
+        setClaimStatus(`Match #${item.matchId} failed, continuing...`);
+      }
+    }
+    setClaiming(false);
+    setClaimStatus(claimed > 0 ? `Claimed ${claimed} match(es)!` : 'No claims succeeded');
+    loadData();
+  };
+
+  if (!isConnected) {
+    return (
+      <div style={{ padding: '48px 24px', textAlign: 'center' }}>
+        <h2 style={{ color: 'var(--neon-green)', marginBottom: '16px' }}>Portfolio</h2>
+        <div className="panel-card muted" style={{ maxWidth: 400, margin: '0 auto', padding: 24 }}>
+          Connect your wallet to view your portfolio
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding: '24px', width: '100%', maxWidth: '800px', margin: '0 auto' }}>
+      <h2 style={{ color: 'var(--neon-green)', textAlign: 'center', marginBottom: '20px' }}>Portfolio</h2>
+
+      {/* Claimable Winnings Banner — always visible */}
+      <div className="panel-section" style={{ marginBottom: '24px' }}>
+        {(() => {
+          const hasClaimable = data && parseFloat(data.claimableTotal) > 0;
+          return (
+            <div className="panel-card" style={{
+              background: hasClaimable ? 'rgba(0,255,136,0.08)' : 'rgba(255,255,255,0.03)',
+              border: hasClaimable ? '1px solid var(--neon-green)' : '1px solid #2a2a4a',
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '16px 20px', borderRadius: '10px',
+            }}>
+              <div>
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-dim)', marginBottom: 4 }}>Claimable Winnings</div>
+                <div style={{ fontSize: '1.6rem', fontWeight: 'bold', color: hasClaimable ? 'var(--neon-green)' : '#555' }}>
+                  {data ? data.claimableTotal : '...'} USDC
+                </div>
+              </div>
+              <button
+                onClick={handleClaimAll}
+                disabled={claiming || !hasClaimable}
+                style={{
+                  padding: '10px 24px', borderRadius: '8px',
+                  background: !hasClaimable ? '#222' : claiming ? '#333' : 'var(--neon-green)',
+                  color: !hasClaimable ? '#555' : claiming ? '#888' : '#000',
+                  border: 'none',
+                  cursor: !hasClaimable || claiming ? 'not-allowed' : 'pointer',
+                  fontFamily: 'Orbitron, monospace', fontSize: '0.85rem', fontWeight: 'bold',
+                }}
+              >
+                {claiming ? 'Claiming...' : 'Claim All'}
+              </button>
+            </div>
+          );
+        })()}
+        {claimStatus && (
+          <div style={{ fontSize: '0.75rem', color: 'var(--neon-blue)', marginTop: 6, textAlign: 'center' }}>{claimStatus}</div>
+        )}
+      </div>
+
+      {/* Tab Switcher */}
+      <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
+        <button
+          onClick={() => setTab('positions')}
+          style={{
+            flex: 1, padding: '10px', borderRadius: '8px', border: '1px solid #2a2a4a',
+            background: tab === 'positions' ? 'rgba(0,255,136,0.15)' : 'transparent',
+            color: tab === 'positions' ? 'var(--neon-green)' : '#888',
+            cursor: 'pointer', fontFamily: 'Orbitron, monospace', fontWeight: 'bold', fontSize: '0.82rem',
+          }}
+        >
+          Active Positions
+        </button>
+        <button
+          onClick={() => setTab('history')}
+          style={{
+            flex: 1, padding: '10px', borderRadius: '8px', border: '1px solid #2a2a4a',
+            background: tab === 'history' ? 'rgba(0,255,136,0.15)' : 'transparent',
+            color: tab === 'history' ? 'var(--neon-green)' : '#888',
+            cursor: 'pointer', fontFamily: 'Orbitron, monospace', fontWeight: 'bold', fontSize: '0.82rem',
+          }}
+        >
+          History
+        </button>
+      </div>
+
+      {/* Content */}
+      {loading ? (
+        <div className="panel-card muted" style={{ textAlign: 'center', padding: 24 }}>Loading...</div>
+      ) : tab === 'positions' ? (
+        <div className="panel-section">
+          <h3>Active Positions</h3>
+          {(!data?.activePositions || data.activePositions.length === 0) ? (
+            <div className="panel-card muted">No active positions</div>
+          ) : (
+            <ul className="fighter-list">
+              {data.activePositions.map((p: any, i: number) => (
+                <li key={i} className="fighter-item alive" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span className="fighter-name">
+                    Match {p.displayMatchId} &middot; {p.botId}
+                  </span>
+                  <span style={{ display: 'flex', gap: '12px', fontSize: '0.8rem' }}>
+                    <span style={{ color: 'var(--neon-blue)' }}>{p.amount} USDC</span>
+                    <span className="muted">Pool: {p.poolTotal}</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ) : (
+        <div className="panel-section">
+          <h3>Bet History</h3>
+          {(!data?.betHistory || data.betHistory.length === 0) ? (
+            <div className="panel-card muted">No bet history</div>
+          ) : (
+            <ul className="fighter-list">
+              {data.betHistory.map((h: any, i: number) => (
+                <li key={i} className="fighter-item alive" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span className="fighter-name" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{
+                      width: 8, height: 8, borderRadius: '50%', display: 'inline-block',
+                      background: h.type === 'bet_win' ? 'var(--neon-green)' : '#ff4466',
+                    }} />
+                    {h.type === 'bet_win' ? 'Win' : h.type === 'bet_place' ? 'Bet' : h.type === 'bet_activity' ? 'Bet' : h.type}
+                    {h.displayMatchId ? ` #${h.displayMatchId}` : ''}
+                  </span>
+                  <span style={{
+                    color: h.type === 'bet_win' ? 'var(--neon-green)' : '#ff4466',
+                    fontWeight: 'bold', fontSize: '0.85rem',
+                  }}>
+                    {h.type === 'bet_win' ? '+' : '-'}{h.amount} {typeof h.amount === 'number' && h.amount > 100 ? 'pts' : 'USDC'}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Full-page Marketplace view — reads from BotMarketplace escrow contract
 function MarketplacePage() {
   const { isConnected, address } = useAccount();
@@ -1690,6 +1918,247 @@ function MarketplacePage() {
   );
 }
 
+// --- Replay Page ---
+function ReplayPage() {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const foodImgRef = useRef<HTMLImageElement | null>(null);
+  const animRef = useRef<number>(0);
+
+  const [inputId, setInputId] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [replay, setReplay] = useState<any>(null);
+
+  // Playback state
+  const [playing, setPlaying] = useState(false);
+  const [speed, setSpeed] = useState(1);
+  const [frameIdx, setFrameIdx] = useState(0);
+  const playingRef = useRef(false);
+  const speedRef = useRef(1);
+  const frameIdxRef = useRef(0);
+
+  useEffect(() => { playingRef.current = playing; }, [playing]);
+  useEffect(() => { speedRef.current = speed; }, [speed]);
+  useEffect(() => { frameIdxRef.current = frameIdx; }, [frameIdx]);
+
+  // Load food image once
+  useEffect(() => {
+    const img = new Image();
+    img.src = foodSvgUrl;
+    img.onload = () => { foodImgRef.current = img; };
+  }, []);
+
+  const loadReplay = async () => {
+    const id = inputId.trim().toUpperCase();
+    if (!id) return;
+    setLoading(true);
+    setError('');
+    setReplay(null);
+    setPlaying(false);
+    setFrameIdx(0);
+    cancelAnimationFrame(animRef.current);
+    try {
+      // Try display ID first (P109, A5), then raw numeric
+      const isDisplayId = /^[PA]\d+$/i.test(id);
+      const url = isDisplayId
+        ? `/api/replay/by-display-id?id=${encodeURIComponent(id)}`
+        : `/api/replay/${encodeURIComponent(id)}`;
+      const res = await fetch(url);
+      if (res.status === 404) { setError('Replay not found'); setLoading(false); return; }
+      if (res.status === 429) { setError('Too many requests, please wait'); setLoading(false); return; }
+      if (!res.ok) { setError('Failed to load replay'); setLoading(false); return; }
+      const data = await res.json();
+      if (!data.frames || data.frames.length === 0) { setError('Replay has no frames'); setLoading(false); return; }
+      setReplay(data);
+      setFrameIdx(0);
+    } catch (e: any) {
+      setError(e?.message || 'Network error');
+    }
+    setLoading(false);
+  };
+
+  // Animation loop
+  useEffect(() => {
+    if (!replay || !playing) return;
+    let lastTime = 0;
+    const baseInterval = 125; // ms per frame at 1x
+    const tick = (ts: number) => {
+      if (!playingRef.current) return;
+      if (lastTime === 0) lastTime = ts;
+      const elapsed = ts - lastTime;
+      const interval = baseInterval / speedRef.current;
+      if (elapsed >= interval) {
+        lastTime = ts;
+        const next = frameIdxRef.current + 1;
+        if (next >= replay.frames.length) {
+          setPlaying(false);
+          return;
+        }
+        setFrameIdx(next);
+      }
+      animRef.current = requestAnimationFrame(tick);
+    };
+    animRef.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(animRef.current);
+  }, [replay, playing]);
+
+  // Render current frame to canvas
+  useEffect(() => {
+    if (!replay || !replay.frames[frameIdx]) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const logicalSize = canvas.width / dpr;
+    const cellSize = logicalSize / 30;
+    const frame = replay.frames[frameIdx];
+    const isComp = replay.arenaType === 'competitive';
+    renderFrame(ctx, frame, cellSize, logicalSize, logicalSize, foodImgRef.current, {
+      gridColor: isComp ? '#1a1020' : '#1a1a2e',
+    });
+  }, [replay, frameIdx]);
+
+  const totalFrames = replay?.frames?.length || 0;
+  const currentFrame = replay?.frames?.[frameIdx];
+  const firstFrame = replay?.frames?.[0];
+
+  return (
+    <div style={{ padding: '24px', width: '100%', maxWidth: '800px', margin: '0 auto' }}>
+      <h2 style={{ color: 'var(--neon-blue)', textAlign: 'center', marginBottom: '20px' }}>Match Replay</h2>
+
+      {/* Input */}
+      <div className="panel-section" style={{ marginBottom: '16px' }}>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', justifyContent: 'center' }}>
+          <input
+            type="text"
+            value={inputId}
+            onChange={e => setInputId(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && loadReplay()}
+            placeholder="Match ID (e.g. P109, A5)"
+            style={{
+              padding: '8px 14px', fontSize: '1rem', borderRadius: '8px',
+              background: '#0a0a1a', color: '#fff', border: '1px solid #2a2a4a',
+              fontFamily: 'Orbitron, monospace', width: '200px',
+            }}
+          />
+          <button
+            onClick={loadReplay}
+            disabled={loading || !inputId.trim()}
+            style={{
+              padding: '8px 20px', fontSize: '0.9rem', fontWeight: 'bold', borderRadius: '8px',
+              background: loading ? '#333' : 'var(--neon-blue)', color: loading ? '#666' : '#000',
+              border: 'none', cursor: loading ? 'default' : 'pointer',
+              fontFamily: 'Orbitron, monospace',
+            }}
+          >
+            {loading ? 'Loading...' : 'Load'}
+          </button>
+        </div>
+        {error && <div style={{ color: '#ff4466', textAlign: 'center', marginTop: '8px', fontSize: '0.85rem' }}>{error}</div>}
+      </div>
+
+      {/* Match info */}
+      {replay && (
+        <div className="panel-section" style={{ marginBottom: '16px' }}>
+          <div className="panel-card" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 16px', fontSize: '0.85rem' }}>
+            <span className="muted">Match</span><span>{replay.arenaType === 'competitive' ? 'A' : 'P'}{replay.matchId}</span>
+            <span className="muted">Arena</span><span>{replay.arenaType || replay.arenaId}</span>
+            <span className="muted">Time</span><span>{replay.timestamp ? new Date(replay.timestamp).toLocaleString() : '--'}</span>
+            <span className="muted">Winner</span><span style={{ color: 'var(--neon-green)' }}>{replay.winner || 'No Winner'}</span>
+            <span className="muted">Score</span><span>{replay.winnerScore ?? '--'}</span>
+            <span className="muted">Frames</span><span>{totalFrames}</span>
+          </div>
+          {/* Players from first frame */}
+          {firstFrame?.players && (
+            <div style={{ marginTop: '8px' }}>
+              <div className="muted" style={{ fontSize: '0.8rem', marginBottom: '4px' }}>Players:</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                {firstFrame.players.map((p: any, i: number) => (
+                  <span key={i} style={{
+                    padding: '2px 8px', borderRadius: '4px', fontSize: '0.8rem',
+                    background: 'rgba(255,255,255,0.05)', color: p.color || '#fff',
+                    border: `1px solid ${p.color || '#333'}`,
+                  }}>{p.name}</span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Canvas + Controls */}
+      {replay && (
+        <div style={{ textAlign: 'center' }}>
+          {/* Timer display */}
+          <div style={{ fontSize: '1.2rem', fontFamily: 'Orbitron, monospace', color: '#ff8800', marginBottom: '6px' }}>
+            {currentFrame ? `${Math.floor(currentFrame.matchTimeLeft / 60)}:${(currentFrame.matchTimeLeft % 60).toString().padStart(2, '0')}` : '--:--'}
+            <span className="muted" style={{ fontSize: '0.75rem', marginLeft: '12px' }}>
+              Frame {frameIdx + 1}/{totalFrames}
+            </span>
+          </div>
+
+          <div className="canvas-wrap" style={{ display: 'inline-block' }}>
+            <canvas
+              ref={canvasRef}
+              width={600 * (typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1)}
+              height={600 * (typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1)}
+              style={{
+                width: 'min(600px, 90vw, 70vh)', height: 'min(600px, 90vw, 70vh)',
+                border: `4px solid ${replay.arenaType === 'competitive' ? 'var(--neon-pink)' : 'var(--neon-blue)'}`,
+                background: '#000',
+              }}
+            />
+          </div>
+
+          {/* Controls */}
+          <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', alignItems: 'center', marginTop: '10px', flexWrap: 'wrap' }}>
+            <button
+              onClick={() => setPlaying(!playing)}
+              style={{
+                padding: '6px 16px', fontSize: '0.85rem', borderRadius: '6px',
+                background: 'rgba(0,136,255,0.2)', color: 'var(--neon-blue)',
+                border: '1px solid var(--neon-blue)', cursor: 'pointer',
+                fontFamily: 'Orbitron, monospace', fontWeight: 'bold', minWidth: '70px',
+              }}
+            >
+              {playing ? 'Pause' : 'Play'}
+            </button>
+            {[1, 2, 4].map(s => (
+              <button
+                key={s}
+                onClick={() => setSpeed(s)}
+                style={{
+                  padding: '4px 10px', fontSize: '0.8rem', borderRadius: '6px',
+                  background: speed === s ? 'var(--neon-blue)' : 'rgba(0,136,255,0.1)',
+                  color: speed === s ? '#000' : 'var(--neon-blue)',
+                  border: '1px solid var(--neon-blue)', cursor: 'pointer',
+                  fontFamily: 'Orbitron, monospace', fontWeight: 'bold',
+                }}
+              >
+                {s}x
+              </button>
+            ))}
+          </div>
+
+          {/* Progress bar */}
+          <div style={{ marginTop: '10px', padding: '0 10px' }}>
+            <input
+              type="range"
+              min={0}
+              max={Math.max(totalFrames - 1, 0)}
+              value={frameIdx}
+              onChange={e => { setFrameIdx(Number(e.target.value)); setPlaying(false); }}
+              style={{ width: '100%', accentColor: 'var(--neon-blue)' }}
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function App() {
   const [, setMatchId] = useState<number | null>(null);
   const [displayMatchId, setDisplayMatchId] = useState<string | null>(null);
@@ -1697,7 +2166,7 @@ function App() {
   const [players, setPlayers] = useState<any[]>([]);
   const [perfLeaderboard, setPerfLeaderboard] = useState<any[]>([]);
   const [compLeaderboard, setCompLeaderboard] = useState<any[]>([]);
-  const [activePage, setActivePage] = useState<'performance' | 'competitive' | 'leaderboard' | 'points' | 'marketplace'>('performance');
+  const [activePage, setActivePage] = useState<'performance' | 'competitive' | 'leaderboard' | 'points' | 'marketplace' | 'portfolio' | 'replay'>('performance');
 
   const playersRef = useRef<any[]>([]);
   const lastPlayersUpdate = useRef(0);
@@ -1761,7 +2230,9 @@ function App() {
               <button className={`tab ${activePage === 'leaderboard' ? 'active' : ''}`} onClick={() => switchPage('leaderboard')}>🏆 排行榜</button>
               <button className={`tab ${activePage === 'points' ? 'active' : ''}`} onClick={() => switchPage('points')}>⭐ 积分</button>
               <button className={`tab ${activePage === 'marketplace' ? 'active' : ''}`} onClick={() => switchPage('marketplace')}>🏪 市场</button>
-              <div style={{ marginLeft: 'auto' }}>
+              <button className={`tab ${activePage === 'replay' ? 'active' : ''}`} onClick={() => switchPage('replay')}>🎬 回放</button>
+              <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <PortfolioButton activePage={activePage} onSwitch={switchPage} />
                 <WalletButton />
               </div>
             </header>
@@ -1803,6 +2274,10 @@ function App() {
               <PointsPage />
             ) : activePage === 'marketplace' ? (
               <MarketplacePage />
+            ) : activePage === 'replay' ? (
+              <ReplayPage />
+            ) : activePage === 'portfolio' ? (
+              <PortfolioPage />
             ) : (
               <div className={`content`}>
                 <aside className="left-panel">
